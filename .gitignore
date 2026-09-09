@@ -1,18 +1,19 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+# ===== Node.js / 前端 =====
+node_modules/
+dist/
+dist-ssr/
+*.local
 
-# Other files and folders
-.settings/
+# ===== Python / 后端 =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+venv/
 
-# Executables
-*.swf
-*.air
-*.ipa
-*.apk
-
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# ===== 系统 / 日志 =====
+.DS_Store
+*.log
+.vscode/
+.idea/
