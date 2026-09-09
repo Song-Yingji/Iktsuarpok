@@ -561,4 +561,4 @@ async def not_found(request, exc):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='127.0.0.1', port=PORT, log_level='info')
+    uvicorn.run(app, host='127.0.0.1', port=PORT, log_level='info', use_colors=False)
