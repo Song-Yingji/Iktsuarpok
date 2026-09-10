@@ -10,13 +10,23 @@ const sentimentTone = { 利好: 'up', 利空: 'down', 中性: 'neutral' }
 const { newsCategories } = useApp()
 
 const list = ref([])
+const newsError = ref('')
 const category = ref('全部')
 const keyword = ref('')
 const detail = ref(null)
 
-const load = () => newsApi.list({ category: category.value, keyword: keyword.value }).then((d) => (list.value = d))
+const load = () => newsApi.list({ category: category.value, keyword: keyword.value }).then((d) => {
+  list.value = d.items || []
+  newsError.value = d.error ? '系统繁忙，请稍后重试' : ''
+}).catch(() => {
+  list.value = []
+  newsError.value = '系统繁忙，请稍后重试'
+})
 
-onMounted(load)
+onMounted(() => {
+  load()
+  setInterval(load, 30000)
+})
 watch([category, keyword], load)
 </script>
 
@@ -31,6 +41,11 @@ watch([category, keyword], load)
         <Icon name="search" :size="15" />
         <input class="input" placeholder="搜索新闻关键词" v-model="keyword" />
       </div>
+    </div>
+
+    <div v-if="newsError" style="display:flex;align-items:center;gap:8px;padding:10px 14px;margin-bottom:16px;background:rgba(246,70,93,0.12);border:1px solid rgba(246,70,93,0.35);border-radius:8px;color:#f6465d;font-size:13px;font-weight:500">
+      <Icon name="close" :size="15" />
+      <span>{{ newsError }}</span>
     </div>
 
     <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px">
@@ -58,7 +73,7 @@ watch([category, keyword], load)
           </div>
         </div>
       </div>
-      <div v-if="list.length === 0" style="padding: 50px; text-align: center; color: var(--text-3)">
+      <div v-if="!newsError && list.length === 0" style="padding: 50px; text-align: center; color: var(--text-3)">
         没有找到相关新闻
       </div>
     </Card>

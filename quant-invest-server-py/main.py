@@ -18,7 +18,8 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 from data import (
-    get_market, tick_market, NEWS, STRATEGIES, BACKTEST_FRAMEWORKS,
+    get_market, tick_market, get_news, news_error, refresh_news, get_news_categories,
+    STRATEGIES, BACKTEST_FRAMEWORKS,
     ACCOUNTS_INIT, POSITIONS_INIT, DEFAULT_PREFS, gen_equity_curve,
 )
 from utils import hash_seed
@@ -38,6 +39,14 @@ async def lifespan(app):
             tick_market()
 
     threading.Thread(target=loop, daemon=True).start()
+
+    def news_loop():
+        refresh_news()
+        while True:
+            time.sleep(60)
+            refresh_news()
+
+    threading.Thread(target=news_loop, daemon=True).start()
     yield
 
 
@@ -291,22 +300,19 @@ async def market_kline(code: str):
 # ================= 新闻 =================
 @app.get('/api/news/categories')
 def news_categories():
-    cats = []
-    for n in NEWS:
-        if n['category'] not in cats:
-            cats.append(n['category'])
-    return ['全部'] + cats
+    return get_news_categories()
 
 
 @app.get('/api/news')
 async def news(category: str = None, keyword: str = None):
-    await asyncio.sleep(0.15)
-    result = list(NEWS)
+    await asyncio.sleep(0.05)
+    result = get_news()
+    err = news_error()
     if category and category != '全部':
         result = [n for n in result if n['category'] == category]
     if keyword:
         result = [n for n in result if keyword in (n['title'] + n['summary'])]
-    return result
+    return {'items': result, 'error': err}
 
 
 # ================= 投资偏好 =================

@@ -374,93 +374,139 @@ def tick_market():
     return m
 
 
-# ============ 财经新闻 ============
-NEWS = [
-    {
-        'id': 1, 'time': '2026-09-04 14:32', 'source': '财联社', 'category': '宏观政策', 'sentiment': '利好',
-        'title': '央行宣布降准0.5个百分点 释放长期资金约1万亿元',
-        'summary': '中国人民银行决定于9月15日下调金融机构存款准备金率0.5个百分点，本次下调后金融机构加权平均存款准备金率约为6.6%，预计释放长期资金约1万亿元，降低银行资金成本每年约150亿元。',
-        'content': '央行有关负责人表示，此次降准旨在保持流动性合理充裕，支持实体经济恢复发展。市场分析认为，宽松信号明确，利好银行、券商及地产板块，A股有望迎来增量资金入场。',
-    },
-    {
-        'id': 2, 'time': '2026-09-04 13:05', 'source': '上海证券报', 'category': '市场动态', 'sentiment': '利好',
-        'title': '沪指放量涨1.28%站上3150点 北向资金净买入86亿元',
-        'summary': '今日A股三大指数集体走强，上证指数收盘涨1.28%报3156.72点，深证成指涨1.74%，创业板指涨2.13%。两市成交额突破1.8万亿元，北向资金全天净买入86.3亿元，为近三个月最大单日净流入。',
-        'content': '盘面上，券商、半导体、新能源板块领涨。分析人士指出，降准预期升温与外围市场回暖共振，市场风险偏好明显修复，成交量放大显示增量资金正在入场。',
-    },
-    {
-        'id': 3, 'time': '2026-09-04 11:48', 'source': '证券时报', 'category': '新能源', 'sentiment': '利好',
-        'title': '宁德时代发布新一代麒麟电池 能量密度提升20%',
-        'summary': '宁德时代在全球新能源大会上发布第三代麒麟电池，系统能量密度达到280Wh/kg，较上一代提升20%，支持10分钟快充，续航里程突破1000公里，已获多家头部车企定点订单。',
-        'content': '机构研报指出，新电池量产将巩固公司技术壁垒，预计2027年贡献营收超300亿元，维持"买入"评级。',
-    },
-    {
-        'id': 4, 'time': '2026-09-04 10:22', 'source': '中国证券报', 'category': '半导体', 'sentiment': '利好',
-        'title': '半导体板块异动拉升 中芯国际涨超5%',
-        'summary': '受国产先进制程突破消息提振，半导体板块早盘集体走强，中芯国际涨5.8%，北方华创、中微公司跟涨。消息面上，国内晶圆厂扩产计划落地，设备招标加速。',
-        'content': '业内人士表示，半导体国产替代进入深水区，设备与材料环节受益确定性最强，建议关注晶圆代工与封测龙头。',
-    },
-    {
-        'id': 5, 'time': '2026-09-04 09:10', 'source': '21世纪经济报道', 'category': '全球市场', 'sentiment': '中性',
-        'title': '美联储会议纪要：年内或再降息一次',
-        'summary': '美联储公布最新会议纪要显示，多数官员认为若通胀继续回落，年内仍有一次25个基点降息空间。美股三大指数收涨，10年期美债收益率回落至3.85%。',
-        'content': '市场对9月降息概率定价升至72%。分析认为，全球流动性预期改善有利于新兴市场资产表现，但需关注美国非农数据扰动。',
-    },
-    {
-        'id': 6, 'time': '2026-09-03 20:15', 'source': '证券日报', 'category': '公司公告', 'sentiment': '利好',
-        'title': '贵州茅台半年报：营收同比增长15.8% 拟中期分红',
-        'summary': '贵州茅台披露2026年半年报，上半年实现营收918亿元，同比增长15.8%；归母净利润456亿元，同比增长16.2%。公司同时公告拟每10股派发现金红利238.8元。',
-        'content': '券商点评认为，公司直销渠道占比提升与系列酒放量驱动增长超预期，现金流充沛，高股息属性强化配置价值。',
-    },
-    {
-        'id': 7, 'time': '2026-09-03 16:40', 'source': '财联社', 'category': '新能源', 'sentiment': '利空',
-        'title': '光伏行业产能过剩担忧加剧 隆基绿能跌3.2%',
-        'summary': '光伏协会发布报告称行业硅料、硅片产能利用率不足55%，价格战持续。受此影响，光伏板块承压，隆基绿能收跌3.2%，通威股份、TCL中环跟跌。',
-        'content': '机构提示，光伏行业正经历供给侧出清阵痛期，短期盈利承压，但落后产能退出后龙头份额有望进一步集中。',
-    },
-    {
-        'id': 8, 'time': '2026-09-03 15:02', 'source': '上海证券报', 'category': '人工智能', 'sentiment': '利好',
-        'title': '科大讯飞与华为达成战略合作 共建国产算力大模型',
-        'summary': '科大讯飞与华为签署全面战略合作协议，双方将基于昇腾算力联合训练新一代星火大模型，并在智慧教育、智能医疗领域推出行业解决方案。',
-        'content': '双方表示，合作将实现大模型训练全栈国产化，预计带动相关业务收入三年复合增速超40%。',
-    },
-    {
-        'id': 9, 'time': '2026-09-03 11:30', 'source': '中国证券报', 'category': '宏观政策', 'sentiment': '利好',
-        'title': '金融监管总局：支持中长期资金入市 险资权益比例有望提升',
-        'summary': '金融监管总局召开座谈会提出，推动保险资金、养老金等中长期资金加大权益市场配置，研究提高险资权益类资产监管比例上限，建立长周期考核机制。',
-        'content': '据测算，险资权益比例每提升1个百分点，将带来约2500亿元增量资金。市场认为蓝筹红利资产将持续受益。',
-    },
-    {
-        'id': 10, 'time': '2026-09-02 19:48', 'source': '证券时报', 'category': '公司公告', 'sentiment': '利好',
-        'title': '比亚迪8月新能源汽车销量42.6万辆 同比增长34%',
-        'summary': '比亚迪公布8月产销快报，新能源汽车销量42.6万辆，同比增长34%；其中海外销售5.8万辆，同比增长112%。1-8月累计销量286万辆，完成全年目标进度超70%。',
-        'content': '机构认为，公司高端品牌仰望、腾势放量改善盈利结构，出海战略进入收获期，上调全年销量预期至430万辆。',
-    },
-    {
-        'id': 11, 'time': '2026-09-02 14:20', 'source': '每日经济新闻', 'category': '有色金属', 'sentiment': '利好',
-        'title': '国际金价创历史新高 紫金矿业受益走强',
-        'summary': '伦敦现货黄金突破2750美元/盎司创历史新高，白银同步走强。A股黄金股集体拉升，紫金矿业涨4.1%，山东黄金、中金黄金涨幅居前。',
-        'content': '分析认为，降息预期与地缘避险需求共振支撑金价，黄金企业盈利弹性显著，紫金矿业铜金双主业优势突出。',
-    },
-    {
-        'id': 12, 'time': '2026-09-02 10:05', 'source': '财联社', 'category': '医药生物', 'sentiment': '中性',
-        'title': '新一轮医药集采结果公布 恒瑞医药多款产品中标',
-        'summary': '第十批国家药品集中采购结果出炉，平均降价58%。恒瑞医药7款产品中标，公司表示以价换量有望巩固市场份额，创新药管线不受集采影响。',
-        'content': '券商认为集采常态化已被市场充分定价，板块关注点正切换至创新药出海与BD交易进展。',
-    },
-    {
-        'id': 13, 'time': '2026-09-01 16:55', 'source': '21世纪经济报道', 'category': '市场动态', 'sentiment': '中性',
-        'title': '两市融资余额突破1.6万亿元 杠杆资金活跃度回升',
-        'summary': '截至8月末，两市融资融券余额达1.62万亿元，其中融资余额1.58万亿元，创年内新高。电子、计算机、非银金融为融资净买入前三行业。',
-        'content': '历史数据显示，融资余额持续攀升往往伴随市场情绪回暖，但快速攀升后需警惕短期波动加大。',
-    },
-    {
-        'id': 14, 'time': '2026-09-01 09:30', 'source': '证券日报', 'category': '消费旅游', 'sentiment': '利好',
-        'title': '暑期旅游消费数据超预期 中国中免获机构扎堆调研',
-        'summary': '文旅部数据显示暑期国内出游人次同比增长18%，离岛免税销售额同比增长22%。近一周32家机构调研中国中免，关注海南封关运作对免税业务的带动。',
-        'content': '公司表示下半年将加大香化品类促销力度，新开门店稳步推进，目标全年营收恢复双位数增长。',
-    },
+# ============ 财经新闻（财联社电报，实时） ============
+_news = []
+_news_error = True
+_news_lock = threading.Lock()
+
+# 板块分类关键词（按顺序命中即归入对应分类）
+_NEWS_CATEGORY_RULES = [
+    ('宏观政策', ['央行', '降准', '降息', '财政', '发改委', '国常会', '监管', '政策', '利率', '存款准备金', 'LPR', '证监会']),
+    ('公司公告', ['公告', '披露', '中标', '定增', '回购', '增持', '减持', '分红', '重组', '并购', '业绩', '半年报', '年报', '季报', '异动']),
+    ('新能源', ['新能源', '光伏', '锂电', '锂电池', '储能', '风电', '充电桩', '氢能', '宁德时代', '比亚迪']),
+    ('半导体', ['半导体', '芯片', '晶圆', '光刻', '集成电路', '中芯', '存储', '封装']),
+    ('人工智能', ['人工智能', 'AI', '大模型', '算力', '机器人', '智能驾驶']),
+    ('医药生物', ['医药', '医疗', '疫苗', '创新药', '集采', '医保', '药']),
+    ('银行金融', ['银行', '存款', '贷款', '房贷', '信贷', '保险']),
+    ('券商金融', ['券商', '证券', 'IPO', '融资融券', '两融', '北向']),
+    ('有色金属', ['黄金', '白银', '铜', '铝', '锂矿', '稀土', '有色', '原油', '煤炭']),
+    ('消费', ['消费', '白酒', '茅台', '五粮液', '免税', '旅游', '零售', '家电', '食品', '百货']),
+    ('全球市场', ['美联储', '美元', '美股', '纳斯达克', '标普', '道指', '欧洲', '日本', '港股']),
+    ('市场动态', ['A股', '沪深', '沪指', '深成指', '创业板', '成交额', '涨停', '跌停', '大盘', '指数', '收盘', '融资余额']),
 ]
+
+_SENT_POS = ['上调', '增长', '突破', '中标', '增持', '回购', '新高', '扩大', '降准', '降息', '利好', '盈利', '超预期', '获批', '翻倍', '上涨', '净流入', '扩张', '涨停', '提振', '回暖', '创新高']
+_SENT_NEG = ['下调', '下跌', '亏损', '减持', '处罚', '违规', '风险', '下滑', '违约', '暴雷', '跌停', '净流出', '萎缩', '承压', '利空', '降级', '立案', '诉讼', '破产', '爆仓', '警示']
+
+
+def _derive_category(text):
+    for cat, kws in _NEWS_CATEGORY_RULES:
+        if any(k in text for k in kws):
+            return cat
+    return '财经快讯'
+
+
+def _derive_sentiment(text):
+    pos = sum(1 for w in _SENT_POS if w in text)
+    neg = sum(1 for w in _SENT_NEG if w in text)
+    if pos > neg:
+        return '利好'
+    if neg > pos:
+        return '利空'
+    return '中性'
+
+
+def _strip_bracket(s):
+    s = (s or '').strip()
+    while s.startswith('【') and '】' in s:
+        s = s[s.index('】') + 1:].strip()
+    return s
+
+
+def _fetch_cls_news(count=20):
+    """拉取财联社电报快讯，返回前端契约格式列表；失败返回 None。"""
+    try:
+        import requests
+    except Exception:
+        return None
+    try:
+        sess = requests.Session()
+        sess.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        })
+        try:
+            sess.get('https://m.cls.cn/telegraph', timeout=10)
+        except Exception:
+            pass
+        params = {'refresh_type': '1', 'rn': str(count), 'app': 'CailianpressWap', 'sv': '1'}
+        resp = sess.get('https://m.cls.cn/nodeapi/telegraphs', params=params, timeout=15)
+        resp.raise_for_status()
+        roll = (resp.json().get('data') or {}).get('roll_data') or []
+    except Exception:
+        return None
+    if not roll:
+        return None
+
+    tz = datetime.timezone(datetime.timedelta(hours=8))
+    items = []
+    for i, row in enumerate(roll):
+        if not isinstance(row, dict):
+            continue
+        title = _strip_bracket(row.get('title') or '')
+        content = _strip_bracket(row.get('content') or '')
+        brief = _strip_bracket(row.get('brief') or '')
+        if not title:
+            title = brief or content
+        if not title:
+            continue
+        if len(title) > 40:
+            title = title[:40] + '…'
+        summary = brief or content
+        if not summary:
+            summary = title
+        try:
+            t = datetime.datetime.fromtimestamp(int(row.get('ctime')), tz)
+        except Exception:
+            t = datetime.datetime.now()
+        text = title + ' ' + summary + ' ' + content
+        items.append({
+            'id': row.get('id') or (i + 1),
+            'time': t.strftime('%Y-%m-%d %H:%M'),
+            'source': '财联社',
+            'category': _derive_category(text),
+            'sentiment': _derive_sentiment(text),
+            'title': title,
+            'summary': summary,
+            'content': content or summary,
+        })
+    items.sort(key=lambda x: x['time'], reverse=True)
+    return items
+
+
+def refresh_news():
+    """拉取并更新内存新闻；失败时保留旧数据，仅在无任何可展示数据时才标记错误。"""
+    global _news, _news_error
+    items = _fetch_cls_news()
+    with _news_lock:
+        if items:
+            _news = items
+            _news_error = False
+        else:
+            _news_error = len(_news) == 0
+
+
+def get_news():
+    with _news_lock:
+        return list(_news)
+
+
+def news_error():
+    with _news_lock:
+        return _news_error
+
+
+def get_news_categories():
+    return ['全部'] + [c for c, _ in _NEWS_CATEGORY_RULES]
 
 # ============ 量化策略模板 ============
 STRATEGIES = [
