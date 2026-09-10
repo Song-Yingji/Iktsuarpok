@@ -1,53 +1,53 @@
 @echo off
 chcp 936 >nul
 setlocal enabledelayedexpansion
-title QuantAI ï¿½ï¿½ï¿½ï¿½Í¶ï¿½ï¿½ÏµÍ³ - Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+title QuantAI ÖÇÄÜÁ¿»¯Í¶×ÊÏµÍ³ - Ò»¼üÆô¶¯
 
 set "BACKEND_DIR=%~dp0quant-invest-server-py"
 set "FRONTEND_DIR=%~dp0quant-invest-vue"
 
 echo ============================================================
-echo    QuantAI ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¶ï¿½ï¿½ÏµÍ³ - Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+echo    QuantAI ÖÇÄÜÁ¿»¯Í¶×ÊÏµÍ³ - Ò»¼üÆô¶¯
 echo ============================================================
-echo    ï¿½ï¿½Ë·ï¿½ï¿½ï¿½ : http://localhost:3000   ï¿½ï¿½Python FastAPIï¿½ï¿½
-echo    Ç°ï¿½ï¿½Ò³ï¿½ï¿½ : http://localhost:5189
+echo    ºó¶Ë·þÎñ : http://localhost:3000   (Python FastAPI)
+echo    Ç°¶ËÒ³Ãæ : http://localhost:5189
 echo ============================================================
 echo.
 
-rem ---- ï¿½ï¿½Î» Pythonï¿½ï¿½ï¿½ï¿½ï¿½È±ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½Ò²ï¿½ï¿½ï¿½ï¿½Ù´ï¿½ PATH ï¿½ï¿½ ----
+rem ---- ¶¨Î» Python ½âÊÍÆ÷£¨ÓÅÏÈÊ¹ÓÃÖ¸¶¨Â·¾¶£¬ÕÒ²»µ½ÔÙ»ØÍË PATH£© ----
 set "PYTHON_EXE="
 if exist "D:\math\python\python.exe" set "PYTHON_EXE=D:\math\python\python.exe"
 if not defined PYTHON_EXE (
     where python >nul 2>&1 && set "PYTHON_EXE=python"
 )
 if not defined PYTHON_EXE (
-    echo [ï¿½ï¿½ï¿½ï¿½] Î´ï¿½Òµï¿½ Python ï¿½ï¿½ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë°²×° Python ï¿½ï¿½ï¿½ï¿½ï¿½Ô¡ï¿½
+    echo [´íÎó] Î´ÕÒµ½ Python£¬ÇëÏÈ°²×° Python ²¢ÅäÖÃ»·¾³±äÁ¿¡£
     pause
     exit /b 1
 )
 
-rem ---- ï¿½ï¿½Î» Nodeï¿½ï¿½ï¿½ï¿½ï¿½È±ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½Ò²ï¿½ï¿½ï¿½ï¿½Ù´ï¿½ PATH ï¿½ï¿½ ----
+rem ---- ¶¨Î» Node£¨ÓÅÏÈÊ¹ÓÃÖ¸¶¨Â·¾¶£¬ÕÒ²»µ½ÔÙ»ØÍË PATH£© ----
 set "NODE_EXE="
 if exist "C:\Users\77018\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\vm\tools\node\node.exe" set "NODE_EXE=C:\Users\77018\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\vm\tools\node\node.exe"
 if not defined NODE_EXE (
     where node >nul 2>&1 && set "NODE_EXE=node"
 )
 if not defined NODE_EXE (
-    echo [ï¿½ï¿½ï¿½ï¿½] Î´ï¿½Òµï¿½ Node.js ï¿½ï¿½ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È°ï¿½×° Node.jsï¿½ï¿½
+    echo [´íÎó] Î´ÕÒµ½ Node.js£¬ÇëÏÈ°²×° Node.js¡£
     pause
     exit /b 1
 )
 
-rem ---- ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ ----
+rem ---- ¼ì²éÏîÄ¿ÎÄ¼þ ----
 if not exist "%BACKEND_DIR%\main.py" (
-    echo [ï¿½ï¿½ï¿½ï¿½] Î´ï¿½Òµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ main.pyï¿½ï¿½
+    echo [´íÎó] Î´ÕÒµ½ºó¶ËÈë¿ÚÎÄ¼þ main.py£º
     echo        %BACKEND_DIR%\main.py
     pause
     exit /b 1
 )
 
 if not exist "%FRONTEND_DIR%\node_modules\vite\bin\vite.js" (
-    echo [ï¿½ï¿½ï¿½ï¿½] Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î´ï¿½ï¿½×°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½Ð£ï¿½
+    echo [´íÎó] Ç°¶ËÒÀÀµÎ´°²×°£¬ÇëÏÈÖ´ÐÐ£º
     echo        cd /d %FRONTEND_DIR%
     echo        npm install
     echo.
@@ -55,38 +55,37 @@ if not exist "%FRONTEND_DIR%\node_modules\vite\bin\vite.js" (
     exit /b 1
 )
 
-echo [1/3] ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ë·ï¿½ï¿½ñ£¨¶Ë¿ï¿½ 3000ï¿½ï¿½...
+echo [1/3] Æô¶¯ºó¶Ë·þÎñ£¨¶Ë¿Ú 3000£©...
 netstat -ano | findstr ":3000 " | findstr "LISTENING" >nul 2>&1
 if !errorlevel!==0 (
-    echo        ï¿½ï¿½Ë·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    echo        ºó¶Ë·þÎñÒÑÔÚÔËÐÐ£¬Ìø¹ý¡£
 ) else (
     pushd "%BACKEND_DIR%"
-    start "QuantAI-ï¿½ï¿½ï¿½-3000" /MIN "%PYTHON_EXE%" -s main.py
+    start "QuantAI-ºó¶Ë-3000" /MIN "%PYTHON_EXE%" -s main.py
     popd
-    echo        ï¿½ï¿½Ë·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    echo        ºó¶Ë·þÎñÒÑÆô¶¯¡£
 )
 
-echo [2/3] ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½Ç°ï¿½Ë·ï¿½ï¿½ñ£¨¶Ë¿ï¿½ 5189ï¿½ï¿½...
+echo [2/3] Æô¶¯Ç°¶Ë·þÎñ£¨¶Ë¿Ú 5189£©...
 netstat -ano | findstr ":5189 " | findstr "LISTENING" >nul 2>&1
 if !errorlevel!==0 (
-    echo        Ç°ï¿½Ë·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    echo        Ç°¶Ë·þÎñÒÑÔÚÔËÐÐ£¬Ìø¹ý¡£
 ) else (
     pushd "%FRONTEND_DIR%"
-    start "QuantAI-Ç°ï¿½ï¿½-5189" /MIN "%NODE_EXE%" node_modules\vite\bin\vite.js
+    start "QuantAI-Ç°¶Ë-5189" /MIN "%NODE_EXE%" node_modules\vite\bin\vite.js
     popd
-    echo        Ç°ï¿½Ë·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    echo        Ç°¶Ë·þÎñÒÑÆô¶¯¡£
 )
 
-echo [3/3] ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½...
+echo [3/3] ´ò¿ªä¯ÀÀÆ÷...
 timeout /t 3 /nobreak >nul
 start "" http://localhost:5189
 
 echo.
 echo ============================================================
-echo    ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ http://localhost:5189
-echo    ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð»ï¿½ï¿½ï¿½ï¿½ï¿½Python (FastAPI)  -  ï¿½Ë¿ï¿½ 3000
-echo    Í£Ö¹ï¿½ï¿½ï¿½ñ£º¹Ø±Õ¶ï¿½Ó¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½Ú£ï¿½
-echo             ï¿½ï¿½Ë«ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½ï¿½ÏµÍ³.batï¿½ï¿½
+echo    »¶Ó­·ÃÎÊ : http://localhost:5189
+echo    ¸ÐÐ»Ê¹ÓÃ Python (FastAPI)  -  ¶Ë¿Ú 3000
+echo    Í£Ö¹·þÎñ£º¹Ø±Õ¶ÔÓ¦·þÎñ´°¿Ú£¬»òË«»÷Í£Ö¹Á¿»¯ÏµÍ³.bat
 echo ============================================================
 echo.
 pause
