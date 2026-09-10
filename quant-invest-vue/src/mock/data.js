@@ -5,8 +5,7 @@ export const INDICES = [
   { code: 'SH000001', name: '上证指数', base: 3128.45 },
   { code: 'SZ399001', name: '深证成指', base: 9862.13 },
   { code: 'SZ399006', name: '创业板指', base: 1932.76 },
-  { code: 'SH000300', name: '沪深300', base: 3685.22 },
-  { code: 'SH000688', name: '科创50', base: 882.47 }
+  { code: 'SH000300', name: '沪深300', base: 3685.22 }
 ]
 
 // ============ 个股 ============

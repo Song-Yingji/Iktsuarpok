@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """数据引擎：行情、新闻、策略模板、账户、持仓等数据与生成逻辑。"""
-import random
+import datetime
+import json
+import os
+import threading
 
 from utils import hash_seed, trading_dates
 
@@ -10,7 +13,6 @@ INDICES = [
     {'code': 'SZ399001', 'name': '深证成指', 'base': 9862.13},
     {'code': 'SZ399006', 'name': '创业板指', 'base': 1932.76},
     {'code': 'SH000300', 'name': '沪深300', 'base': 3685.22},
-    {'code': 'SH000688', 'name': '科创50', 'base': 882.47},
 ]
 
 # ============ 个股 ============
@@ -43,29 +45,124 @@ STOCKS = [
 ]
 
 
-def gen_candles(code, base, days=240):
-    """生成确定性历史K线：{ date, open, close, high, low, volume }。"""
-    rnd = hash_seed('kline-' + code)
-    dates = trading_dates(days)
-    drift = (rnd() - 0.46) * 0.0018
-    vol = 0.011 + rnd() * 0.016
-    raw = []
-    price = base * (0.62 + rnd() * 0.5)
-    for i in range(days):
-        open_ = price
-        close = open_ * (1 + drift + (rnd() - 0.5) * vol * 2)
-        high = max(open_, close) * (1 + rnd() * vol * 0.7)
-        low = min(open_, close) * (1 - rnd() * vol * 0.7)
-        volume = int((0.5 + rnd() * 1.4) * 8e6 + 0.5)
-        raw.append({'date': dates[i], 'open': open_, 'close': close, 'high': high, 'low': low, 'volume': volume})
-        price = close
-    scale = base / raw[-1]['close']
-    for c in raw:
-        c['open'] *= scale
-        c['close'] *= scale
-        c['high'] *= scale
-        c['low'] *= scale
-    return raw
+# ============ 真实历史行情（Baostock，前复权，截至最近已收盘交易日） ============
+_HISTORY_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_history_cache.json')
+
+
+def _bs_symbol(code):
+    """转为 Baostock 证券代码：600519 -> sh.600519，SH000001 -> sh.000001。"""
+    c = code.upper()
+    if c.startswith('SH'):
+        return 'sh.' + c[2:]
+    if c.startswith('SZ'):
+        return 'sz.' + c[2:]
+    if c.startswith('6'):
+        return 'sh.' + c
+    if c.startswith(('0', '3')):
+        return 'sz.' + c
+    return c
+
+
+def _fetch_real_histories():
+    """一次性拉取全部标的真实历史日K，返回 {code: [candle]}；失败返回 None。
+
+    个股用前复权(adjustflag=2)、指数用不复权(3)。历史只保留到最近一个已收盘
+    交易日（剔除今天这根），今日行情交给实时源 easyquotation，实现「历史K线与
+    今日实时分离」，从而历史回测口径一致、不被盘中实时价污染。
+    """
+    try:
+        import baostock as bs
+    except Exception:
+        return None
+
+    try:
+        lg = bs.login()
+    except Exception:
+        return None
+    if getattr(lg, 'error_code', '1') != '0':
+        return None
+    try:
+        today = datetime.date.today()
+        today_s = today.strftime('%Y-%m-%d')
+        specs = [('2', s) for s in STOCKS] + [('3', i) for i in INDICES]
+        result = {}
+        for adjust, s in specs:
+            code = s['code']
+            days = 240 if adjust == '2' else 120
+            start = (today - datetime.timedelta(days=int(days * 1.6))).strftime('%Y-%m-%d')
+            try:
+                rs = bs.query_history_k_data_plus(
+                    _bs_symbol(code), 'date,open,high,low,close,volume',
+                    start_date=start, end_date=today_s,
+                    frequency='d', adjustflag=adjust)
+            except Exception:
+                continue
+            rows = []
+            while getattr(rs, 'error_code', '1') == '0' and rs.next():
+                rows.append(rs.get_row_data())
+            if not rows:
+                continue
+            candles = []
+            for r in rows:
+                try:
+                    d, o, h, l, c, v = r[0], float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if d >= today_s:
+                    continue
+                candles.append({'date': d, 'open': o, 'high': h, 'low': l, 'close': c, 'volume': v})
+            if candles:
+                result[code] = candles[-days:]
+        return result or None
+    finally:
+        try:
+            bs.logout()
+        except Exception:
+            pass
+
+
+def _load_history_cache():
+    try:
+        with open(_HISTORY_CACHE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _save_history_cache(data):
+    try:
+        with open(_HISTORY_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+
+def _apply_histories(data):
+    """把真实历史写入内存行情项（实时 tick 会继续覆盖 spark 末点，不冲突）。"""
+    m = _market
+    if not m or not data:
+        return
+    for s in m['stocks']:
+        if s['code'] in data:
+            s['history'] = data[s['code']]
+            s['spark'] = [round(c['close'], 2) for c in s['history'][-60:]]
+    for ix in m['indices']:
+        if ix['code'] in data:
+            ix['spark'] = [round(c['close'], 2) for c in data[ix['code']][-60:]]
+
+
+def _refresh_real_histories():
+    """后台任务：拉真实历史，成功后更新内存并写本地缓存；失败标记历史不可用。"""
+    m = _market
+    data = _fetch_real_histories()
+    if data:
+        _apply_histories(data)
+        _save_history_cache(data)
+        if m is not None:
+            m['historyError'] = False
+    elif m is not None:
+        # 拉取失败且内存中仍无任何真实历史 → 标记不可用（前端提示，不回退模拟）
+        m['historyError'] = not any(s['history'] for s in m['stocks'])
 
 
 # ============ 行情引擎（单例，模拟实时推送） ============
@@ -77,74 +174,203 @@ def get_market():
     if _market:
         return _market
 
+    cached = _load_history_cache() or {}
+
     stocks = []
     for s in STOCKS:
-        history = gen_candles(s['code'], s['base'])
-        today = history[-1]
-        prev_close = history[-2]['close']
+        # 只用真实历史；无缓存视为「历史未就绪」，不生成模拟K线
+        history = cached.get(s['code']) or []
+        if history:
+            last = history[-1]  # 最近一个已收盘交易日（昨收）
+            prev_close = last['close']
+            volume = last['volume']
+            amount = last['volume'] * last['close']
+            spark = [round(c['close'], 2) for c in history[-60:]]
+        else:
+            prev_close = s['base']
+            volume = 0
+            amount = 0
+            spark = []
         rnd = hash_seed('meta-' + s['code'])
         item = dict(s)
         item.update({
             'history': history,
             'prevClose': prev_close,
-            'open': today['open'],
-            'price': today['close'],
-            'lastPrice': today['close'],
-            'high': today['high'],
-            'low': today['low'],
-            'volume': today['volume'],
-            'amount': today['volume'] * today['close'],
+            'open': prev_close,
+            'price': prev_close,
+            'lastPrice': prev_close,
+            'high': prev_close,
+            'low': prev_close,
+            'volume': volume,
+            'amount': amount,
             'turnover': 0.4 + rnd() * 3.2,
-            'spark': [round(c['close'], 2) for c in history[-60:]],
+            'spark': spark,
         })
         stocks.append(item)
 
     indices = []
     for ix in INDICES:
-        history = gen_candles(ix['code'], ix['base'], 120)
-        today = history[-1]
-        prev_close = history[-2]['close']
+        history = cached.get(ix['code']) or []
+        if history:
+            last = history[-1]
+            prev_close = last['close']
+            spark = [round(c['close'], 2) for c in history[-60:]]
+        else:
+            prev_close = ix['base']
+            spark = []
         item = dict(ix)
         item.update({
             'prevClose': prev_close,
-            'open': today['open'],
-            'price': today['close'],
-            'lastPrice': today['close'],
-            'high': today['high'],
-            'low': today['low'],
-            'amount': 1.2e10 + random.random() * 4e10,
-            'spark': [round(c['close'], 2) for c in history[-60:]],
+            'open': prev_close,
+            'price': prev_close,
+            'lastPrice': prev_close,
+            'high': prev_close,
+            'low': prev_close,
+            'amount': 0,
+            'spark': spark,
         })
         indices.append(item)
 
-    _market = {'stocks': stocks, 'indices': indices}
+    _market = {
+        'stocks': stocks,
+        'indices': indices,
+        'realtimeError': False,
+        'historyError': not any(s['history'] for s in stocks),
+    }
+
+    # 后台拉真实历史：有缓存会刷新最新，无缓存则首次补全（失败标记 historyError）
+    try:
+        threading.Thread(target=_refresh_real_histories, daemon=True).start()
+    except Exception:
+        pass
     return _market
 
 
+def _to_prefixed(code):
+    """把内部代码（如 600519 / SH000001）转换为 easyquotation 带市场前缀的代码。"""
+    c = code.upper()
+    if c.startswith('SH'):
+        return 'sh' + c[2:]
+    if c.startswith('SZ'):
+        return 'sz' + c[2:]
+    if c.startswith('6'):
+        return 'sh' + c
+    if c.startswith(('0', '3')):
+        return 'sz' + c
+    if c.startswith(('4', '8')):
+        return 'bj' + c
+    return c
+
+
+_quotation = None
+
+
+def _get_quotation():
+    """惰性初始化 easyquotation 新浪行情源，失败返回 None。"""
+    global _quotation
+    if _quotation is False:
+        return None
+    if _quotation is None:
+        try:
+            import easyquotation
+            _quotation = easyquotation.use('sina')
+        except Exception:
+            _quotation = False
+            return None
+    return _quotation
+
+
+def _fetch_realtime(codes):
+    """拉取一组代码的实时行情，返回 {原始code: quote}；失败返回 None。"""
+    q = _get_quotation()
+    if q is None:
+        return None
+    prefixed_codes = [_to_prefixed(c) for c in codes]
+    try:
+        data = q.stocks(prefixed_codes, prefix=True)
+    except Exception:
+        return None
+    prefix_map = {_to_prefixed(c): c for c in codes}
+    result = {}
+    for k, v in (data or {}).items():
+        orig = prefix_map.get(k)
+        if orig:
+            result[orig] = v
+    return result
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_stock_quote(s, q):
+    """把 easyquotation 行情写入个股字典。"""
+    now = _num(q.get('now')) if isinstance(q, dict) else None
+    if now is None:
+        return
+    s['lastPrice'] = s['price']
+    s['price'] = now
+    if _num(q.get('open')) is not None:
+        s['open'] = _num(q.get('open'))
+    if _num(q.get('high')) is not None:
+        s['high'] = _num(q.get('high'))
+    if _num(q.get('low')) is not None:
+        s['low'] = _num(q.get('low'))
+    if _num(q.get('close')) is not None:
+        s['prevClose'] = _num(q.get('close'))
+    # 新浪语义：turnover=成交量(股)，volume=成交额(元)
+    if _num(q.get('turnover')) is not None:
+        s['volume'] = int(_num(q.get('turnover')))
+    if _num(q.get('volume')) is not None:
+        s['amount'] = _num(q.get('volume'))
+    if s['spark']:
+        s['spark'][-1] = round(now, 2)
+    else:
+        s['spark'].append(round(now, 2))
+
+
+def _apply_index_quote(ix, q):
+    """把 easyquotation 行情写入指数字典。"""
+    now = _num(q.get('now')) if isinstance(q, dict) else None
+    if now is None:
+        return
+    ix['lastPrice'] = ix['price']
+    ix['price'] = now
+    if _num(q.get('open')) is not None:
+        ix['open'] = _num(q.get('open'))
+    if _num(q.get('high')) is not None:
+        ix['high'] = _num(q.get('high'))
+    if _num(q.get('low')) is not None:
+        ix['low'] = _num(q.get('low'))
+    if _num(q.get('close')) is not None:
+        ix['prevClose'] = _num(q.get('close'))
+    if ix['spark']:
+        ix['spark'][-1] = round(now, 2)
+    else:
+        ix['spark'].append(round(now, 2))
+
+
 def tick_market():
-    """推进一个 tick：随机游走更新最新价。"""
+    """推进一个 tick：只用真实行情，失败标记异常（不回退模拟）。"""
     m = get_market()
-    for s in m['stocks']:
-        s['lastPrice'] = s['price']
-        pct = (random.random() - 0.5) * 0.006
-        s['price'] = max(0.01, s['price'] * (1 + pct))
-        s['high'] = max(s['high'], s['price'])
-        s['low'] = min(s['low'], s['price'])
-        s['volume'] += int(random.random() * 1.2e5)
-        s['amount'] = s['volume'] * s['price']
-        s['spark'][-1] = round(s['price'], 2)
-        today = s['history'][-1]
-        today['close'] = s['price']
-        today['high'] = s['high']
-        today['low'] = s['low']
-        today['volume'] = s['volume']
-    for ix in m['indices']:
-        ix['lastPrice'] = ix['price']
-        pct = (random.random() - 0.5) * 0.0022
-        ix['price'] = max(1, ix['price'] * (1 + pct))
-        ix['high'] = max(ix['high'], ix['price'])
-        ix['low'] = min(ix['low'], ix['price'])
-        ix['spark'][-1] = round(ix['price'], 2)
+    codes = [s['code'] for s in m['stocks']] + [i['code'] for i in m['indices']]
+    quotes = _fetch_realtime(codes)
+    if quotes:
+        for s in m['stocks']:
+            q = quotes.get(s['code'])
+            if q:
+                _apply_stock_quote(s, q)
+        for ix in m['indices']:
+            q = quotes.get(ix['code'])
+            if q:
+                _apply_index_quote(ix, q)
+        m['realtimeError'] = False
+    else:
+        # 实时行情源失效：保持价格不动，标记异常，交给前端提示
+        m['realtimeError'] = True
     return m
 
 

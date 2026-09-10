@@ -5,6 +5,7 @@ const user = ref(JSON.parse(localStorage.getItem('quant_user') || 'null'))
 const tick = ref(0)
 const toasts = reactive([])
 const market = ref({ stocks: [], indices: [] })
+const marketError = ref('')
 const strategies = ref([])
 const frameworks = ref([])
 const newsCategories = ref(['全部'])
@@ -17,10 +18,14 @@ newsApi.categories().then((d) => (newsCategories.value = d)).catch(() => {})
 // 实时行情：每 2 秒向后端拉取一次快照
 async function pollMarket() {
   try {
-    market.value = await marketApi.getSnapshot()
+    const data = await marketApi.getSnapshot()
+    market.value = data
     tick.value++
+    if (data.realtimeError) marketError.value = '系统繁忙，请稍后重试'
+    else if (data.historyError) marketError.value = '服务器开小差了，请稍后重试'
+    else marketError.value = ''
   } catch (e) {
-    /* 网络异常静默处理，等待下次轮询 */
+    marketError.value = '系统繁忙，请稍后重试'
   }
 }
 pollMarket()
@@ -46,5 +51,5 @@ function logout() {
 }
 
 export function useApp() {
-  return { user, tick, toasts, toast, login, logout, market, strategies, frameworks, newsCategories }
+  return { user, tick, toasts, toast, login, logout, market, marketError, strategies, frameworks, newsCategories }
 }

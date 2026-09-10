@@ -6,7 +6,7 @@ import { Card, Chip, Drawer, Button, Badge } from '../components/ui'
 import EChart from '../components/EChart.vue'
 import Icon from '../components/Icon.vue'
 
-const { tick, toast, market } = useApp()
+const { tick, toast, market, marketError } = useApp()
 
 // 迷你走势图
 function sparkOption(data, up) {
@@ -113,8 +113,14 @@ const chgOf = (p, prev) => (p - prev) / prev
       </div>
     </div>
 
+    <!-- 行情异常提示 -->
+    <div v-if="marketError" style="display:flex;align-items:center;gap:8px;padding:10px 14px;margin-bottom:16px;background:rgba(246,70,93,0.12);border:1px solid rgba(246,70,93,0.35);border-radius:8px;color:#f6465d;font-size:13px;font-weight:500">
+      <Icon name="close" :size="15" />
+      <span>{{ marketError }}</span>
+    </div>
+
     <!-- 大盘指数 -->
-    <div class="grid grid-5">
+    <div class="grid grid-4">
       <div v-for="ix in market.indices" :key="ix.code" class="index-card">
         <div class="index-name">
           <span>{{ ix.name }}</span>
@@ -219,7 +225,8 @@ const chgOf = (p, prev) => (p - prev) / prev
         </div>
 
         <Card title="日K线 · MA均线 · 成交量" bodyClass="flush">
-          <EChart :option="klineOption(selected)" style="height: 420px" />
+          <EChart v-if="selected.history && selected.history.length" :option="klineOption(selected)" style="height: 420px" />
+          <div v-else style="height:420px;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:13px">历史行情暂时不可用，请稍后重试</div>
         </Card>
       </template>
     </Drawer>
