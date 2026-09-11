@@ -148,28 +148,14 @@ onMounted(load)
         </div>
       </Card>
 
-      <!-- 自动化开关 -->
+      <!-- 通知 -->
       <Card class="mt-16" title="自动化与通知">
-        <div class="account-row">
-          <div style="display:flex;flex-direction:column;gap:3px">
-            <span>自动调仓</span>
-            <small style="color:var(--text-3);font-size:11.5px">策略触发信号后自动执行买卖</small>
-          </div>
-          <Toggle :checked="prefs.autoRebalance" @change="(v) => set('autoRebalance', v)" />
-        </div>
         <div class="account-row">
           <div style="display:flex;flex-direction:column;gap:3px">
             <span>交易提醒</span>
             <small style="color:var(--text-3);font-size:11.5px">产生交易信号或成交时推送通知</small>
           </div>
           <Toggle :checked="prefs.tradeNotify" @change="(v) => set('tradeNotify', v)" />
-        </div>
-        <div class="account-row">
-          <div style="display:flex;flex-direction:column;gap:3px">
-            <span>每日复盘报告</span>
-            <small style="color:var(--text-3);font-size:11.5px">收盘后生成当日投资复盘汇总</small>
-          </div>
-          <Toggle :checked="prefs.dailyReport" @change="(v) => set('dailyReport', v)" />
         </div>
       </Card>
     </template>

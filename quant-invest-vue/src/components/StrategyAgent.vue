@@ -1,9 +1,10 @@
 <script setup>
 import { ref, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { agentApi } from '../api'
+import { agentApi, strategyApi } from '../api'
 import { Card, Button, Badge, Chip } from './ui'
 import Icon from './Icon.vue'
+import { useApp } from '../store/app'
 
 const QUICK_PROMPTS = [
   '写一个 MACD 零轴上方金叉买入的策略',
@@ -12,6 +13,7 @@ const QUICK_PROMPTS = [
 ]
 
 const router = useRouter()
+const { toast } = useApp()
 const messages = ref([
   {
     role: 'bot',
@@ -37,6 +39,12 @@ async function send(text) {
   const res = await agentApi.generateStrategy(prompt)
   typing.value = false
   messages.value.push({ role: 'bot', type: 'strategy', data: res })
+}
+
+async function saveStrategy(msg) {
+  await strategyApi.save(msg.data)
+  msg.saved = true
+  toast('已保存到我的量化策略')
 }
 </script>
 
@@ -68,7 +76,9 @@ async function send(text) {
                 <li v-for="(r, j) in msg.data.rules" :key="j">{{ r }}</li>
               </ul>
               <pre>{{ msg.data.code }}</pre>
-              <div style="margin-top: 10px; display: flex; gap: 8px">
+              <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center">
+                <Button v-if="!msg.saved" size="sm" icon="check" @click="saveStrategy(msg)">保存到我的量化策略</Button>
+                <Badge v-else tone="up">已保存</Badge>
                 <Button size="sm" icon="strategy" @click="router.push('/strategy')">前往回测验证</Button>
               </div>
             </div>

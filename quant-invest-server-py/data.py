@@ -5,7 +5,7 @@ import json
 import os
 import threading
 
-from utils import hash_seed, trading_dates
+from utils import hash_seed
 
 # ============ 大盘指数 ============
 INDICES = [
@@ -562,57 +562,8 @@ BACKTEST_FRAMEWORKS = [
     {'id': 'zipline', 'name': 'Zipline', 'desc': 'Quantopian 开源引擎，适合美股日频策略研究'},
 ]
 
-# ============ 账户 ============
-ACCOUNTS_INIT = [
-    {
-        'id': 'ACC-001', 'broker': '模拟账户', 'type': '模拟盘', 'accountNo': 'SIM-20260901',
-        'status': 'active', 'totalAssets': 1000000, 'cash': 326500,
-        'autoTrade': True, 'strategyId': 'ma_cross', 'strategyEnabled': True, 'risk': '稳健型', 'created': '2026-08-15',
-    },
-    {
-        'id': 'ACC-002', 'broker': '华泰证券', 'type': '实盘 · A股', 'accountNo': '6600 **** 2891',
-        'status': 'connected', 'totalAssets': 586200, 'cash': 84200,
-        'autoTrade': False, 'strategyId': 'macd', 'strategyEnabled': True, 'risk': '平衡型', 'created': '2026-07-22',
-    },
-    {
-        'id': 'ACC-003', 'broker': '盈透证券 IB', 'type': '实盘 · 美股', 'accountNo': 'U **** 7720',
-        'status': 'connected', 'totalAssets': 248300, 'cash': 15600,
-        'autoTrade': True, 'strategyId': None, 'strategyEnabled': False, 'risk': '进取型', 'created': '2026-06-08',
-    },
-    {
-        'id': 'ACC-004', 'broker': '东方财富证券', 'type': '实盘 · A股', 'accountNo': '8801 **** 6634',
-        'status': 'disconnected', 'totalAssets': 120000, 'cash': 120000,
-        'autoTrade': False, 'strategyId': None, 'strategyEnabled': False, 'risk': '保守型', 'created': '2026-09-01',
-    },
-]
-
-# ============ 持仓（模拟账户 ACC-001） ============
-POSITIONS_INIT = [
-    {'code': '600519', 'qty': 100, 'cost': 1620.5},
-    {'code': '300750', 'qty': 500, 'cost': 188.2},
-    {'code': '600036', 'qty': 8000, 'cost': 33.8},
-    {'code': '002594', 'qty': 300, 'cost': 232.4},
-    {'code': '688981', 'qty': 1000, 'cost': 82.6},
-    {'code': '601899', 'qty': 10000, 'cost': 16.8},
-    {'code': '002415', 'qty': 2000, 'cost': 30.5},
-]
-
-
-def gen_equity_curve(seed, start_capital, days=120):
-    """账户历史净值曲线（120 个交易日）。"""
-    rnd = hash_seed('equity-' + seed)
-    dates = trading_dates(days)
-    drift = 0.0006 + rnd() * 0.0008
-    vol = 0.008 + rnd() * 0.008
-    v = start_capital * (0.82 + rnd() * 0.1)
-    result = []
-    for date in dates:
-        v = v * (1 + drift + (rnd() - 0.5) * vol * 2)
-        result.append({'date': date, 'value': round(v)})
-    return result
-
-
 # ============ 投资偏好默认值 ============
+# 默认值需与前端 quant-invest-vue/src/lib/constants.js 的 DEFAULT_PREFS 保持一致，修改请同步两边
 DEFAULT_PREFS = {
     'risk': '稳健型',
     'horizon': '中线（1-6个月）',
@@ -620,13 +571,7 @@ DEFAULT_PREFS = {
     'maxPosition': 25,
     'stopLoss': 8,
     'takeProfit': 30,
-    'autoRebalance': True,
     'tradeNotify': True,
-    'dailyReport': True,
     'benchmark': '沪深300',
 }
 
-SECTORS = ['白酒消费', '食品消费', '家电消费', '消费旅游', '银行金融', '券商金融', '保险金融', '新能源', '新能源车', '光伏新能源', '有色金属', '半导体', '人工智能', '电子科技', '通信运营', '医药生物', '公用事业']
-RISK_LEVELS = ['保守型', '稳健型', '平衡型', '进取型', '激进型']
-HORIZONS = ['短线（1个月内）', '中线（1-6个月）', '长线（1年以上）']
-BENCHMARKS = ['沪深300', '上证指数', '中证500', '创业板指']

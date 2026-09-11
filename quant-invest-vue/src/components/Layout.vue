@@ -9,8 +9,8 @@ import { ToastContainer } from './ui'
 const NAV = [
   { section: '交易中心' },
   { to: '/market', icon: 'market', label: '行情中心' },
+  { to: '/watchlist', icon: 'star', label: '自选股' },
   { to: '/news', icon: 'news', label: '财经新闻' },
-  { to: '/positions', icon: 'positions', label: '资产仓位' },
   { section: '智能量化' },
   { to: '/agents', icon: 'agent', label: 'AI 智能体' },
   { to: '/strategy', icon: 'strategy', label: '量化策略' },

@@ -8,6 +8,9 @@ env/
 venv/
 .venv/
 
+# 数据库连接配置（含密码，勿提交）
+db_config.py
+
 # 历史行情本地缓存（运行时自动生成，勿提交）
 _history_cache.json
 

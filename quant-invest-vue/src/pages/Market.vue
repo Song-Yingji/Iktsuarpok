@@ -1,12 +1,27 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useApp } from '../store/app'
+import { watchlistApi } from '../api'
 import { fmt, tone } from '../lib/utils'
 import { Card, Chip, Drawer, Button, Badge } from '../components/ui'
 import EChart from '../components/EChart.vue'
 import Icon from '../components/Icon.vue'
 
 const { tick, toast, market, marketError } = useApp()
+const watched = ref(new Set())
+
+onMounted(async () => {
+  try {
+    const list = await watchlistApi.list()
+    watched.value = new Set(list.map((s) => s.code))
+  } catch (e) {}
+})
+
+async function addWatch(s) {
+  await watchlistApi.add(s.code)
+  watched.value = new Set([...watched.value, s.code])
+  toast(`已将 ${s.name} 加入自选股`)
+}
 
 // 迷你走势图
 function sparkOption(data, up) {
@@ -199,7 +214,8 @@ const chgOf = (p, prev) => (p - prev) / prev
             {{ fmt.pct(chgOf(selected.price, selected.prevClose)) }}
             &nbsp;({{ fmt.num(selected.price - selected.prevClose) }})
           </span>
-          <Button size="sm" icon="plus" @click="toast(`已将 ${selected.name} 加入自选股`)">加自选</Button>
+          <Button v-if="!watched.has(selected.code)" size="sm" icon="plus" @click="addWatch(selected)">加自选</Button>
+          <Button v-else size="sm" variant="ghost" disabled>已加入自选</Button>
         </div>
 
         <div class="kv-list" style="margin-bottom: 16px">

@@ -6,18 +6,29 @@ const BASE_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3000/api'
 
 async function request(path, options = {}) {
   const method = options.method || 'GET'
+  const token = localStorage.getItem('quant_token')
   let res
   try {
     res = await fetch(BASE_URL + path, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {})
+      },
       body: options.body ? JSON.stringify(options.body) : undefined
     })
   } catch (e) {
     throw new Error('无法连接后端服务，请确认服务已启动')
   }
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.message || `请求失败 (${res.status})`)
+  if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('quant_token')
+      localStorage.removeItem('quant_user')
+      if (!['/login', '/register'].includes(location.pathname)) location.href = '/login'
+    }
+    throw new Error(data.message || `请求失败 (${res.status})`)
+  }
   return data
 }
 
@@ -57,10 +68,20 @@ export const agentApi = {
   generateStrategy: (prompt) => request('/agent/generate-strategy', { method: 'POST', body: { prompt } })
 }
 
+// ---------------- 自选股 ----------------
+export const watchlistApi = {
+  list: () => request('/watchlist'),
+  add: (code) => request('/watchlist', { method: 'POST', body: { code } }),
+  remove: (code) => request('/watchlist/' + code, { method: 'DELETE' })
+}
+
 // ---------------- 策略 / 回测 ----------------
 export const strategyApi = {
   list: () => request('/strategy'),
-  frameworks: () => request('/strategy/frameworks')
+  frameworks: () => request('/strategy/frameworks'),
+  saved: () => request('/strategy/saved'),
+  save: (payload) => request('/strategy/saved', { method: 'POST', body: payload }),
+  remove: (id) => request('/strategy/saved/' + id, { method: 'DELETE' })
 }
 
 export const runBacktest = (payload) => request('/strategy/backtest', { method: 'POST', body: payload })
@@ -69,10 +90,6 @@ export const runBacktest = (payload) => request('/strategy/backtest', { method: 
 export const accountApi = {
   list: () => request('/accounts'),
   update: (id, patch) => request('/accounts/' + id, { method: 'PUT', body: patch }),
-  create: (payload) => request('/accounts', { method: 'POST', body: payload })
-}
-
-// ---------------- 持仓 / 资产 ----------------
-export const positionApi = {
-  get: () => request('/positions')
+  create: (payload) => request('/accounts', { method: 'POST', body: payload }),
+  remove: (id) => request('/accounts/' + id, { method: 'DELETE' })
 }

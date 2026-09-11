@@ -1,11 +1,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { accountApi } from '../api'
+import { accountApi, strategyApi } from '../api'
 import { fmt } from '../lib/utils'
 import { Card, StatCard, Button, Badge, Toggle, Modal, Field } from '../components/ui'
+import Icon from '../components/Icon.vue'
 import { useApp } from '../store/app'
 
-const { toast, strategies } = useApp()
+const { toast } = useApp()
 
 const STATUS = {
   active: { label: '运行中', tone: 'up' },
@@ -14,6 +15,7 @@ const STATUS = {
 }
 
 const accounts = ref([])
+const strategies = ref([])
 const loading = ref(false)
 const savingId = ref(null)
 
@@ -22,12 +24,13 @@ const creating = ref(false)
 const form = ref({ broker: '', type: '模拟盘', capital: 100000, accountNo: '' })
 
 const totalAssets = computed(() => accounts.value.reduce((a, x) => a + x.totalAssets, 0))
-const totalCash = computed(() => accounts.value.reduce((a, x) => a + x.cash, 0))
 const autoCount = computed(() => accounts.value.filter((x) => x.autoTrade).length)
 
 async function load() {
   loading.value = true
-  accounts.value = await accountApi.list()
+  const [accs, savedStrategies] = await Promise.all([accountApi.list(), strategyApi.saved()])
+  accounts.value = accs
+  strategies.value = savedStrategies
   loading.value = false
 }
 
@@ -47,11 +50,23 @@ async function patch(acc, changes) {
 
 function onStrategy(acc, e) {
   const strategyId = e.target.value || null
-  patch(acc, { strategyId })
+  const changes = strategyId ? { strategyId } : { strategyId: null, autoTrade: false }
+  patch(acc, changes)
 }
 
 function onAuto(acc, checked) {
   patch(acc, { autoTrade: checked })
+}
+
+async function unbind(acc) {
+  if (!window.confirm(`确定解绑账户「${acc.broker}」吗？解绑后将从账户列表移除。`)) return
+  try {
+    await accountApi.remove(acc.id)
+    accounts.value = accounts.value.filter((x) => x.id !== acc.id)
+    toast('账户已解绑')
+  } catch (e) {
+    toast(e.message, 'error')
+  }
 }
 
 async function createAccount() {
@@ -84,15 +99,18 @@ onMounted(load)
     </div>
 
     <!-- 概览 -->
-    <div class="grid grid-4">
+    <div class="grid grid-3">
       <StatCard icon="wallet" label="账户总数" :value="accounts.length" sub="实时同步的账户数量" />
       <StatCard icon="account" label="总资产" :value="fmt.money(totalAssets)" sub="全部账户资产合计" />
-      <StatCard icon="check" label="可用资金" :value="fmt.money(totalCash)" sub="可立即调用的现金" />
       <StatCard icon="bolt" label="自动交易" :value="autoCount" :sub="`${accounts.length} 个账户中已开启`" :tone="autoCount > 0 ? 'up' : ''" />
     </div>
 
     <!-- 账户卡列表 -->
     <div v-if="loading" style="text-align:center;padding:40px;color:var(--text-3)">账户加载中…</div>
+    <div v-else-if="!accounts.length" class="empty-state" style="padding: 48px 20px">
+      <Icon name="account" :size="30" />
+      <p>暂无账户，点击右上角「添加账户」创建你的第一个交易账户</p>
+    </div>
     <div v-else class="grid grid-2 mt-16">
       <div v-for="acc in accounts" :key="acc.id" class="account-card">
         <div class="account-top">
@@ -103,7 +121,12 @@ onMounted(load)
               <small>{{ acc.type }} · {{ acc.accountNo }}</small>
             </div>
           </div>
-          <Badge :tone="STATUS[acc.status]?.tone || 'neutral'" dot>{{ STATUS[acc.status]?.label || acc.status }}</Badge>
+          <div style="display:flex;align-items:center;gap:8px">
+            <Badge :tone="STATUS[acc.status]?.tone || 'neutral'" dot>{{ STATUS[acc.status]?.label || acc.status }}</Badge>
+            <button type="button" class="icon-btn" title="解绑账户" @click="unbind(acc)">
+              <Icon name="close" :size="15" />
+            </button>
+          </div>
         </div>
 
         <div class="account-nums">
@@ -133,11 +156,6 @@ onMounted(load)
         <div class="account-row">
           <span class="r-label">自动交易</span>
           <Toggle :checked="acc.autoTrade" @change="(v) => onAuto(acc, v)" />
-        </div>
-
-        <div class="account-row">
-          <span class="r-label">风险等级</span>
-          <Badge tone="warn">{{ acc.risk }}</Badge>
         </div>
 
         <div class="account-row">

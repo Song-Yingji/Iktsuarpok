@@ -31,7 +31,7 @@ async function submit() {
   loading.value = true
   try {
     const res = isLogin.value ? await authApi.login(form) : await authApi.register(form)
-    login(res.user)
+    login(res.user, res.token)
     router.push('/market')
   } catch (err) {
     error.value = err.message
@@ -101,7 +101,7 @@ async function submit() {
           </template>
         </p>
         <p class="auth-foot" style="margin-top: 8px; font-size: 12px">
-          演示环境：输入任意用户名和 6 位以上密码即可登录
+          登录需已注册账户，注册后数据将安全保存到你的账户
         </p>
       </div>
     </div>

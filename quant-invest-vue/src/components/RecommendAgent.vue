@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { agentApi, prefsApi } from '../api'
+import { agentApi, prefsApi, watchlistApi } from '../api'
 import { fmt, tone } from '../lib/utils'
 import { Card, Button, Badge, Steps } from './ui'
 import Icon from './Icon.vue'
@@ -12,9 +12,19 @@ const { toast } = useApp()
 const running = ref(false)
 const step = ref(-1)
 const recs = ref(null)
+const watchedCodes = ref(new Set())
 let prefs = null
 
-onMounted(() => { prefsApi.get().then((p) => (prefs = p)) })
+onMounted(() => {
+  prefsApi.get().then((p) => (prefs = p))
+  watchlistApi.list().then((list) => (watchedCodes.value = new Set(list.map((s) => s.code)))).catch(() => {})
+})
+
+async function addWatch(r) {
+  await watchlistApi.add(r.code)
+  watchedCodes.value = new Set([...watchedCodes.value, r.code])
+  toast(`已将 ${r.name} 加入自选股`)
+}
 
 async function run() {
   running.value = true
@@ -97,6 +107,10 @@ function dashOffset(score) { return C * (1 - score / 100) }
           <span style="font-size: 11.5px; color: var(--text-3)">
             置信度 <b style="color: var(--accent-2)">{{ r.confidence }}%</b> · {{ r.sector }}
           </span>
+        </div>
+        <div style="display: flex; justify-content: flex-end; margin-top: 10px">
+          <Button v-if="!watchedCodes.has(r.code)" size="sm" icon="plus" @click="addWatch(r)">加入自选</Button>
+          <Button v-else size="sm" variant="ghost" disabled>已加入自选</Button>
         </div>
       </div>
     </div>

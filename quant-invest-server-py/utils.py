@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""量化后端工具函数：确定性伪随机、交易日序列、延迟。"""
-import datetime
+"""量化后端工具函数：确定性伪随机、延迟。"""
 import time
 
 MASK32 = 0xFFFFFFFF
@@ -36,17 +35,6 @@ def hash_seed(s):
         return (h & MASK32) / 4294967296.0
 
     return rnd
-
-
-def trading_dates(days):
-    """生成交易日日期序列（跳过周末），返回从早到晚共 days 个日期字符串。"""
-    dates = []
-    d = datetime.date(2026, 9, 4)
-    while len(dates) < days:
-        if d.weekday() < 5:  # 周一(0) ~ 周五(4)
-            dates.insert(0, d.strftime('%Y-%m-%d'))
-        d -= datetime.timedelta(days=1)
-    return dates
 
 
 def delay(ms):

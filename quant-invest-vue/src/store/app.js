@@ -40,13 +40,15 @@ function toast(msg, type = 'success') {
   }, 3200)
 }
 
-function login(u) {
+function login(u, token) {
   localStorage.setItem('quant_user', JSON.stringify(u))
+  if (token) localStorage.setItem('quant_token', token)
   user.value = u
 }
 
 function logout() {
   localStorage.removeItem('quant_user')
+  localStorage.removeItem('quant_token')
   user.value = null
 }
 

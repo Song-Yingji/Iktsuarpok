@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
-import { runBacktest } from '../api'
+import { ref, computed, onMounted } from 'vue'
+import { runBacktest, strategyApi } from '../api'
 import { fmt, tone } from '../lib/utils'
-import { Card, Button, Badge, Field, Slider, Steps, Empty } from '../components/ui'
+import { Card, Button, Badge, Field, Steps, Empty } from '../components/ui'
 import EChart from '../components/EChart.vue'
+import Icon from '../components/Icon.vue'
 import { useApp } from '../store/app'
 
 const RUN_STEPS = ['初始化回测框架', '加载历史行情', '逐K线模拟交易', '计算绩效指标']
@@ -95,11 +96,12 @@ function drawdownChartOption(result) {
   }
 }
 
-const { toast, market, strategies, frameworks } = useApp()
+const { toast, market, frameworks } = useApp()
 const stocks = computed(() => market.value.stocks)
 
-const strategyId = ref('ma_cross')
-const params = ref({ fast: 5, slow: 20 })
+const saved = ref([])
+const loading = ref(true)
+const selectedId = ref(null)
 const stockCode = ref('600519')
 const capital = ref(1000000)
 const rangeDays = ref(120)
@@ -108,16 +110,36 @@ const running = ref(false)
 const step = ref(-1)
 const result = ref(null)
 
-const strategy = computed(() => strategies.value.find((s) => s.id === strategyId.value))
+const selected = computed(() => saved.value.find((s) => s.id === selectedId.value))
+const frameworkName = computed(() => frameworks.value.find((f) => f.id === framework.value)?.name)
+
+async function load() {
+  loading.value = true
+  try {
+    saved.value = await strategyApi.saved()
+    if (!selectedId.value && saved.value.length) selectedId.value = saved.value[0].id
+  } finally {
+    loading.value = false
+  }
+}
 
 function pickStrategy(id) {
-  strategyId.value = id
-  const s = strategies.value.find((x) => x.id === id)
-  params.value = Object.fromEntries(s.params.map((p) => [p.key, p.value]))
+  selectedId.value = id
   result.value = null
 }
 
+async function removeStrategy(s) {
+  await strategyApi.remove(s.id)
+  saved.value = saved.value.filter((x) => x.id !== s.id)
+  if (selectedId.value === s.id) {
+    selectedId.value = saved.value[0]?.id || null
+    result.value = null
+  }
+  toast('策略已删除')
+}
+
 async function run() {
+  if (!selected.value) return toast('请先选择一个量化策略', 'error')
   running.value = true
   result.value = null
   for (let i = 0; i < RUN_STEPS.length; i++) {
@@ -125,7 +147,7 @@ async function run() {
     await new Promise((r) => setTimeout(r, 500))
   }
   const res = await runBacktest({
-    strategyId: strategyId.value, stockCode: stockCode.value, params: params.value,
+    strategyId: selected.value.engineId, stockCode: stockCode.value, params: selected.value.params,
     capital: capital.value, framework: framework.value, rangeDays: rangeDays.value
   })
   result.value = res
@@ -135,7 +157,6 @@ async function run() {
 }
 
 const metrics = computed(() => result.value?.metrics)
-const frameworkName = computed(() => frameworks.value.find((f) => f.id === framework.value)?.name)
 
 const metricTiles = computed(() => {
   if (!metrics.value) return []
@@ -151,6 +172,8 @@ const metricTiles = computed(() => {
     { label: '期末资产', value: fmt.moneyWan(m.finalValue), tone: tone(m.totalReturn), desc: `初始 ${fmt.moneyWan(capital.value)}` }
   ]
 })
+
+onMounted(load)
 </script>
 
 <template>
@@ -158,78 +181,71 @@ const metricTiles = computed(() => {
     <div class="page-head">
       <div>
         <h1>量化策略与回测</h1>
-        <p>选择策略模板、配置参数、挑选回测框架，用历史数据验证策略有效性</p>
+        <p>展示智能体生成并保存的策略，选择回测标的、区间和框架，用历史数据验证策略有效性</p>
       </div>
       <div class="page-actions">
-        <Button icon="bolt" :loading="running" @click="run">
+        <Button icon="bolt" :loading="running" :disabled="!selected" @click="run">
           {{ running ? '回测进行中…' : '运行回测' }}
         </Button>
       </div>
     </div>
 
-    <!-- 策略选择 -->
-    <Card title="① 选择策略模板">
-      <div class="grid grid-3" style="gap: 12px">
+    <!-- 已保存的策略 -->
+    <Card title="① 选择量化策略">
+      <div v-if="loading" style="text-align:center;padding:32px;color:var(--text-3)">策略加载中…</div>
+      <div v-else-if="!saved.length" class="empty-state" style="padding: 32px 20px">
+        <Icon name="strategy" :size="30" />
+        <p>暂无已保存的策略，请前往「AI 智能体」页生成并保存策略</p>
+      </div>
+      <div v-else class="grid grid-3" style="gap: 12px">
         <div
-          v-for="s in strategies"
+          v-for="s in saved"
           :key="s.id"
-          :class="['strat-card', strategyId === s.id && 'selected']"
+          :class="['strat-card', selectedId === s.id && 'selected']"
           @click="pickStrategy(s.id)"
         >
-          <h4>
-            {{ s.name }}
-            <Badge tone="neutral">{{ s.type }}</Badge>
-          </h4>
-          <p>{{ s.desc }}</p>
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px">
+            <h4 style="margin-bottom: 6px">
+              {{ s.name }}
+              <Badge tone="neutral">{{ s.type }}</Badge>
+            </h4>
+            <button class="icon-btn" title="删除策略" @click.stop="removeStrategy(s)">
+              <Icon name="close" :size="15" />
+            </button>
+          </div>
+          <p>{{ (s.rules && s.rules[0]) || '无策略规则描述' }}</p>
           <div class="strat-meta">
-            <Badge tone="warn">风险 {{ s.risk }}</Badge>
-            <Badge tone="info">频率 {{ s.freq }}</Badge>
+            <Badge tone="info">智能体生成</Badge>
+            <Badge tone="neutral">{{ s.createdAt }}</Badge>
           </div>
         </div>
       </div>
     </Card>
 
-    <!-- 参数与回测设置 -->
-    <div class="grid grid-2 mt-16">
-      <Card title="② 策略参数">
-        <Field v-for="p in (strategy?.params || [])" :key="p.key" :label="`${p.label}：${params[p.key]}`">
-          <Slider
-            :value="params[p.key]" :min="p.min" :max="p.max" :step="p.step"
-            @change="(v) => (params = { ...params, [p.key]: v })"
-          />
-        </Field>
-        <div style="font-size: 12.5px; color: var(--text-3); line-height: 1.7; margin-top: 4px">
-          参数调整后将实时作用于信号计算；策略规则：{{ strategy?.desc }}
-        </div>
-      </Card>
-
-      <Card title="③ 回测设置">
-        <div class="grid grid-2" style="gap: 12px">
+    <!-- 回测设置 -->
+    <div class="grid mt-16" style="gap: 12px">
+      <Card title="② 回测设置（标的 · 区间 · 框架）">
+        <div class="grid grid-2" style="gap: 20px 24px">
           <Field label="回测标的">
             <select class="select" v-model="stockCode">
               <option v-for="s in stocks" :key="s.code" :value="s.code">{{ s.name }}（{{ s.code }}）</option>
             </select>
           </Field>
-          <Field label="初始资金">
-            <select class="select" v-model="capital">
-              <option v-for="v in [100000, 500000, 1000000, 5000000]" :key="v" :value="v">{{ fmt.money(v) }}</option>
-            </select>
+          <Field label="回测区间">
+            <div class="segmented" style="display: flex">
+              <button
+                v-for="r in RANGES"
+                :key="r.value"
+                type="button"
+                :class="['seg-item', rangeDays === r.value && 'active']"
+                style="flex: 1"
+                @click="rangeDays = r.value"
+              >
+                {{ r.label }}
+              </button>
+            </div>
           </Field>
         </div>
-        <Field label="回测区间">
-          <div class="segmented" style="display: flex">
-            <button
-              v-for="r in RANGES"
-              :key="r.value"
-              type="button"
-              :class="['seg-item', rangeDays === r.value && 'active']"
-              style="flex: 1"
-              @click="rangeDays = r.value"
-            >
-              {{ r.label }}
-            </button>
-          </div>
-        </Field>
         <Field label="回测框架">
           <div class="grid grid-2" style="gap: 10px">
             <div
@@ -259,7 +275,7 @@ const metricTiles = computed(() => {
 
     <!-- 未回测 -->
     <Card v-if="!running && !result" class="mt-16">
-      <Empty text="配置完成后点击「运行回测」，这里将展示买卖点、资金曲线与绩效评价" />
+      <Empty text="选择一个已保存的策略并配置回测设置，点击「运行回测」，这里将展示买卖点、资金曲线与绩效评价" />
     </Card>
 
     <template v-if="result">

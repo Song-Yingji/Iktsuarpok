@@ -5,22 +5,26 @@
 运行：python main.py  （默认端口 3000）
 """
 import asyncio
+import json
 import re
 import threading
 import time
 import math
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Body
+import pymysql
+from fastapi import FastAPI, Body, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import uvicorn
 
+import auth
+import db
 from data import (
     get_market, tick_market, get_news, news_error, refresh_news, get_news_categories,
     STRATEGIES, BACKTEST_FRAMEWORKS,
-    ACCOUNTS_INIT, POSITIONS_INIT, DEFAULT_PREFS, gen_equity_curve,
+    DEFAULT_PREFS,
 )
 from utils import hash_seed
 
@@ -61,6 +65,30 @@ app.add_middleware(
 
 def fail(status, message):
     return JSONResponse(status_code=status, content={'message': message})
+
+
+def _json_loads(val):
+    """读取 MySQL JSON 列：兼容 str/bytes/已解析对象。"""
+    if val is None:
+        return None
+    if isinstance(val, (bytes, bytearray)):
+        val = val.decode('utf-8')
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return None
+    return val
+
+
+def get_current_user(authorization: str = Header(default=None)) -> int:
+    """从 Authorization: Bearer <token> 解析当前登录用户 id。"""
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='未登录或登录已过期')
+    uid = auth.parse_token(authorization[7:])
+    if not uid:
+        raise HTTPException(status_code=401, detail='未登录或登录已过期')
+    return uid
 
 
 # ================= 技术指标 =================
@@ -262,9 +290,10 @@ async def login(payload: dict = Body(default=None)):
     password = payload.get('password')
     if not username or not password:
         return fail(400, '请输入用户名和密码')
-    if len(password) < 6:
-        return fail(400, '密码长度至少 6 位')
-    return {'token': 'mock-token-' + str(int(time.time() * 1000)), 'user': {'username': username, 'avatar': str(username)[:1].upper()}}
+    row = db.query_one('SELECT id, username, password_hash, avatar FROM users WHERE username=%s', (username,))
+    if not row or not auth.verify_password(password, row['password_hash']):
+        return fail(401, '用户名或密码错误')
+    return {'token': auth.make_token(row['id']), 'user': {'id': row['id'], 'username': row['username'], 'avatar': row['avatar']}}
 
 
 @app.post('/api/auth/register')
@@ -280,7 +309,14 @@ async def register(payload: dict = Body(default=None)):
         return fail(400, '密码长度至少 6 位')
     if phone and not re.fullmatch(r'1\d{10}', str(phone)):
         return fail(400, '手机号格式不正确')
-    return {'token': 'mock-token-' + str(int(time.time() * 1000)), 'user': {'username': username, 'avatar': str(username)[:1].upper()}}
+    if db.query_one('SELECT id FROM users WHERE username=%s', (username,)):
+        return fail(409, '用户名已存在')
+    avatar = str(username)[:1].upper()
+    uid = db.insert(
+        'INSERT INTO users (username, password_hash, phone, avatar) VALUES (%s,%s,%s,%s)',
+        (username, auth.hash_password(password), phone or None, avatar),
+    )
+    return {'token': auth.make_token(uid), 'user': {'id': uid, 'username': username, 'avatar': avatar}}
 
 
 # ================= 行情 =================
@@ -316,19 +352,49 @@ async def news(category: str = None, keyword: str = None):
 
 
 # ================= 投资偏好 =================
-prefs_store = dict(DEFAULT_PREFS)
+def _row_to_prefs(row):
+    return {
+        'risk': row['risk'],
+        'horizon': row['horizon'],
+        'benchmark': row['benchmark'],
+        'sectors': _json_loads(row['sectors']) or [],
+        'maxPosition': row['max_position'],
+        'stopLoss': row['stop_loss'],
+        'takeProfit': row['take_profit'],
+        'tradeNotify': bool(row['trade_notify']),
+    }
 
 
 @app.get('/api/prefs')
-async def get_prefs():
+async def get_prefs(uid: int = Depends(get_current_user)):
     await asyncio.sleep(0.1)
-    return dict(prefs_store)
+    row = db.query_one('SELECT * FROM user_preferences WHERE user_id=%s', (uid,))
+    return _row_to_prefs(row) if row else dict(DEFAULT_PREFS)
 
 
 @app.post('/api/prefs')
-async def save_prefs(payload: dict = Body(default=None)):
+async def save_prefs(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
     await asyncio.sleep(LATENCY)
-    prefs_store.update(payload or {})
+    p = payload or {}
+    db.execute(
+        'INSERT INTO user_preferences '
+        '(user_id, risk, horizon, benchmark, sectors, max_position, stop_loss, take_profit, trade_notify) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) '
+        'ON DUPLICATE KEY UPDATE risk=VALUES(risk), horizon=VALUES(horizon), benchmark=VALUES(benchmark), '
+        'sectors=VALUES(sectors), max_position=VALUES(max_position), stop_loss=VALUES(stop_loss), '
+        'take_profit=VALUES(take_profit), trade_notify=VALUES(trade_notify)',
+        (
+            uid,
+            p.get('risk', DEFAULT_PREFS['risk']),
+            p.get('horizon', DEFAULT_PREFS['horizon']),
+            p.get('benchmark', DEFAULT_PREFS['benchmark']),
+            json.dumps(p.get('sectors') or [], ensure_ascii=False),
+            p.get('maxPosition', DEFAULT_PREFS['maxPosition']),
+            p.get('stopLoss', DEFAULT_PREFS['stopLoss']),
+            p.get('takeProfit', DEFAULT_PREFS['takeProfit']),
+            1 if p.get('tradeNotify', DEFAULT_PREFS['tradeNotify']) else 0,
+        ),
+    )
     return {'ok': True}
 
 
@@ -390,6 +456,8 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
         return {
             'name': 'AI-MACD 零轴金叉策略',
             'type': '趋势跟踪',
+            'engineId': 'macd',
+            'params': {'fast': 12, 'slow': 26, 'signal': 9},
             'rules': [
                 '入场：DIF 在零轴上方上穿 DEA（金叉），且当日成交量 > 5 日均量 1.2 倍',
                 '加仓：回踩 DEA 不破且红柱再次放大时加仓 50%',
@@ -413,6 +481,8 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
         return {
             'name': 'AI-多标的动量轮动策略',
             'type': '动量轮动',
+            'engineId': 'momentum',
+            'params': {'lookback': 20, 'stop': 8},
             'rules': [
                 '股票池：沪深300 成分股，每周五收盘后排名',
                 '入场：选取过去 20 日涨幅前 3 且站上 20 日均线的标的等权买入',
@@ -435,6 +505,8 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
     return {
         'name': 'AI-双均线趋势策略',
         'type': '趋势跟踪',
+        'engineId': 'ma_cross',
+        'params': {'fast': 5, 'slow': 20},
         'rules': [
             '入场：5 日均线上穿 20 日均线（金叉），次日开盘买入',
             '离场：5 日均线下穿 20 日均线（死叉），次日开盘卖出',
@@ -482,83 +554,175 @@ async def backtest(payload: dict = Body(default=None)):
     return result
 
 
+# ================= 自选股 =================
+@app.get('/api/watchlist')
+async def get_watchlist(uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.05)
+    rows = db.query('SELECT stock_code FROM watchlist WHERE user_id=%s ORDER BY id', (uid,))
+    codes = [r['stock_code'] for r in rows]
+    m = get_market()
+    return [s for c in codes for s in m['stocks'] if s['code'] == c]
+
+
+@app.post('/api/watchlist')
+async def add_watchlist(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.1)
+    code = (payload or {}).get('code')
+    if not code:
+        return fail(400, '缺少股票代码')
+    try:
+        db.insert('INSERT INTO watchlist (user_id, stock_code) VALUES (%s,%s)', (uid, code))
+    except pymysql.err.IntegrityError:
+        pass  # 已存在，忽略
+    return {'ok': True}
+
+
+@app.delete('/api/watchlist/{code}')
+async def remove_watchlist(code: str, uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.1)
+    affected = db.execute('DELETE FROM watchlist WHERE user_id=%s AND stock_code=%s', (uid, code))
+    if not affected:
+        return fail(404, '自选股不存在')
+    return {'ok': True}
+
+
+# ================= 已保存的量化策略（智能体生成） =================
+def _row_to_strategy(row):
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'type': row['type'],
+        'engineId': row['engine_id'],
+        'params': _json_loads(row['params']) or {},
+        'rules': _json_loads(row['rules']) or [],
+        'code': row['code'] or '',
+        'createdAt': row['created_at'].strftime('%Y-%m-%d'),
+    }
+
+
+@app.get('/api/strategy/saved')
+async def list_saved_strategies(uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.1)
+    rows = db.query('SELECT * FROM saved_strategies WHERE user_id=%s ORDER BY id DESC', (uid,))
+    return [_row_to_strategy(r) for r in rows]
+
+
+@app.post('/api/strategy/saved')
+async def save_strategy(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.2)
+    p = payload or {}
+    if not p.get('name'):
+        return fail(400, '缺少策略名称')
+    engine_id = p.get('engineId') or 'ma_cross'
+    params = p.get('params') or {'fast': 5, 'slow': 20}
+    rules = p.get('rules') or []
+    code = p.get('code') or ''
+    sid = db.insert(
+        'INSERT INTO saved_strategies (user_id, name, type, engine_id, params, rules, code) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s)',
+        (uid, p['name'], p.get('type'), engine_id,
+         json.dumps(params, ensure_ascii=False), json.dumps(rules, ensure_ascii=False), code),
+    )
+    row = db.query_one('SELECT * FROM saved_strategies WHERE id=%s', (sid,))
+    return _row_to_strategy(row)
+
+
+@app.delete('/api/strategy/saved/{strategy_id}')
+async def delete_saved_strategy(strategy_id: int, uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.1)
+    affected = db.execute('DELETE FROM saved_strategies WHERE id=%s AND user_id=%s', (strategy_id, uid))
+    if not affected:
+        return fail(404, '策略不存在')
+    return {'ok': True}
+
+
 # ================= 账户 =================
-accounts = [dict(a) for a in ACCOUNTS_INIT]
+def _row_to_account(row):
+    return {
+        'id': row['id'],
+        'broker': row['broker'],
+        'type': row['type'],
+        'accountNo': row['account_no'],
+        'status': row['status'],
+        'totalAssets': float(row['total_assets']),
+        'cash': float(row['cash']),
+        'autoTrade': bool(row['auto_trade']),
+        'strategyId': row['strategy_id'],
+        'created': row['created_at'].strftime('%Y-%m-%d'),
+    }
 
 
 @app.get('/api/accounts')
-async def list_accounts():
+async def list_accounts(uid: int = Depends(get_current_user)):
     await asyncio.sleep(0.15)
-    return [dict(a) for a in accounts]
+    rows = db.query('SELECT * FROM accounts WHERE user_id=%s ORDER BY id', (uid,))
+    return [_row_to_account(r) for r in rows]
 
 
 @app.post('/api/accounts')
-async def create_account(payload: dict = Body(default=None)):
+async def create_account(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
     await asyncio.sleep(0.3)
     payload = payload or {}
     capital = payload.get('capital') or 100000
-    acc = {
-        'id': 'ACC-' + str(len(accounts) + 1).zfill(3),
-        'status': 'connected', 'totalAssets': capital, 'cash': capital,
-        'autoTrade': False, 'strategyId': None, 'strategyEnabled': False,
-        'created': time.strftime('%Y-%m-%d'),
-    }
-    acc.update(payload)
-    accounts.append(acc)
-    return dict(acc)
+    aid = db.insert(
+        'INSERT INTO accounts (user_id, broker, type, account_no, status, total_assets, cash, auto_trade, strategy_id) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,0,NULL)',
+        (uid, payload.get('broker') or '未命名账户', payload.get('type') or '模拟盘',
+         payload.get('accountNo'), 'connected', capital, capital),
+    )
+    row = db.query_one('SELECT * FROM accounts WHERE id=%s', (aid,))
+    return _row_to_account(row)
 
 
 @app.put('/api/accounts/{account_id}')
-async def update_account(account_id: str, payload: dict = Body(default=None)):
+async def update_account(account_id: int, payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
     await asyncio.sleep(0.2)
-    acc = next((a for a in accounts if a['id'] == account_id), None)
-    if not acc:
+    row = db.query_one('SELECT * FROM accounts WHERE id=%s AND user_id=%s', (account_id, uid))
+    if not row:
         return fail(404, '账户不存在')
     patch = payload or {}
-    if patch.get('autoTrade') and not acc.get('strategyId') and not patch.get('strategyId'):
+    new_auto = patch.get('autoTrade', bool(row['auto_trade']))
+    strategy_id = patch.get('strategyId', row['strategy_id'])
+    # 兼容前端 select 传来的字符串 id（"5"），解绑时转 None
+    strategy_id = int(strategy_id) if strategy_id not in (None, '') else None
+    if new_auto and not strategy_id:
         return fail(400, '请先为账户绑定量化策略，再开启自动交易')
-    acc.update(patch)
-    return dict(acc)
+    db.execute(
+        'UPDATE accounts SET broker=%s, type=%s, account_no=%s, status=%s, '
+        'total_assets=%s, cash=%s, auto_trade=%s, strategy_id=%s WHERE id=%s',
+        (
+            patch.get('broker', row['broker']),
+            patch.get('type', row['type']),
+            patch.get('accountNo', row['account_no']),
+            patch.get('status', row['status']),
+            float(patch.get('totalAssets', row['total_assets'])),
+            float(patch.get('cash', row['cash'])),
+            1 if new_auto else 0,
+            strategy_id,
+            account_id,
+        ),
+    )
+    updated = db.query_one('SELECT * FROM accounts WHERE id=%s', (account_id,))
+    return _row_to_account(updated)
 
 
-# ================= 持仓 / 资产 =================
-@app.get('/api/positions')
-async def positions():
-    await asyncio.sleep(0.15)
-    m = get_market()
-    positions_list = []
-    for p in POSITIONS_INIT:
-        s = next((x for x in m['stocks'] if x['code'] == p['code']), None)
-        price = s['price'] if s else p['cost']
-        name = s['name'] if s else p['code']
-        market_value = price * p['qty']
-        cost_value = p['cost'] * p['qty']
-        positions_list.append({
-            'code': p['code'], 'name': name, 'qty': p['qty'], 'cost': p['cost'], 'price': price,
-            'marketValue': market_value, 'pnl': market_value - cost_value,
-            'pnlPct': price / p['cost'] - 1, 'weight': 0,
-            'dayPct': (s['price'] - s['prevClose']) / s['prevClose'] if s else 0,
-        })
-    total_market_value = sum(p['marketValue'] for p in positions_list)
-    cash = 326500
-    total_assets = total_market_value + cash
-    for p in positions_list:
-        p['weight'] = p['marketValue'] / total_assets
-    total_pnl = sum(p['pnl'] for p in positions_list)
-    day_pnl = sum(p['marketValue'] * p['dayPct'] / (1 + p['dayPct']) for p in positions_list)
-    return {
-        'accounts': [{**a, 'curve': gen_equity_curve(a['id'], a['totalAssets'])} for a in accounts],
-        'positions': positions_list,
-        'summary': {
-            'totalAssets': total_assets, 'totalMarketValue': total_market_value, 'cash': cash,
-            'totalPnl': total_pnl, 'dayPnl': day_pnl, 'totalCost': total_market_value - total_pnl,
-        },
-    }
+@app.delete('/api/accounts/{account_id}')
+async def delete_account(account_id: int, uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.2)
+    affected = db.execute('DELETE FROM accounts WHERE id=%s AND user_id=%s', (account_id, uid))
+    if not affected:
+        return fail(404, '账户不存在')
+    return {'ok': True}
 
 
 @app.get('/api/health')
 def health():
     return {'status': 'ok', 'service': 'quant-invest-server', 'lang': 'python'}
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return fail(exc.status_code, exc.detail)
 
 
 @app.exception_handler(404)

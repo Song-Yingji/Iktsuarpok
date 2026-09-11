@@ -10,11 +10,11 @@ const routes = [
     children: [
       { path: '', redirect: '/market' },
       { path: 'market', component: () => import('../pages/Market.vue') },
+      { path: 'watchlist', component: () => import('../pages/Watchlist.vue') },
       { path: 'news', component: () => import('../pages/News.vue') },
       { path: 'agents', component: () => import('../pages/Agents.vue') },
       { path: 'strategy', component: () => import('../pages/Strategy.vue') },
       { path: 'accounts', component: () => import('../pages/Accounts.vue') },
-      { path: 'positions', component: () => import('../pages/Positions.vue') },
       { path: 'preferences', component: () => import('../pages/Preferences.vue') }
     ]
   },
