@@ -1,44 +1,23 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { agentApi, prefsApi, watchlistApi } from '../api'
+import { onMounted } from 'vue'
 import { fmt, tone } from '../lib/utils'
 import { Card, Button, Badge, Steps } from './ui'
 import Icon from './Icon.vue'
-import { useApp } from '../store/app'
+import { useRecommendAgent } from '../store/agent'
 
-const REC_STEPS = ['扫描全市场', '技术面分析', '基本面筛选', 'AI 综合评分']
+// 荐股结果托管在 store，组件卸载不销毁，切回本页自动恢复
+const {
+  REC_STEPS,
+  recs,
+  recRunning: running,
+  recStep: step,
+  watchedCodes,
+  loadRecoDeps,
+  runRecommend: run,
+  addWatch
+} = useRecommendAgent()
 
-const { toast } = useApp()
-const running = ref(false)
-const step = ref(-1)
-const recs = ref(null)
-const watchedCodes = ref(new Set())
-let prefs = null
-
-onMounted(() => {
-  prefsApi.get().then((p) => (prefs = p))
-  watchlistApi.list().then((list) => (watchedCodes.value = new Set(list.map((s) => s.code)))).catch(() => {})
-})
-
-async function addWatch(r) {
-  await watchlistApi.add(r.code)
-  watchedCodes.value = new Set([...watchedCodes.value, r.code])
-  toast(`已将 ${r.name} 加入自选股`)
-}
-
-async function run() {
-  running.value = true
-  recs.value = null
-  for (let i = 0; i < REC_STEPS.length; i++) {
-    step.value = i
-    await new Promise((r) => setTimeout(r, 550))
-  }
-  const data = await agentApi.recommend(prefs)
-  recs.value = data
-  step.value = -1
-  running.value = false
-  toast('荐股智能体已完成本轮分析')
-}
+onMounted(loadRecoDeps)
 
 const R = 22
 const C = 2 * Math.PI * R

@@ -2,16 +2,13 @@ import { reactive, ref } from 'vue'
 import { marketApi, strategyApi, newsApi } from '../api'
 
 const user = ref(JSON.parse(localStorage.getItem('quant_user') || 'null'))
-const tick = ref(0)
 const toasts = reactive([])
 const market = ref({ stocks: [], indices: [] })
 const marketError = ref('')
-const strategies = ref([])
 const frameworks = ref([])
 const newsCategories = ref(['全部'])
 
 // 静态资源：启动即拉取
-strategyApi.list().then((d) => (strategies.value = d)).catch(() => {})
 strategyApi.frameworks().then((d) => (frameworks.value = d)).catch(() => {})
 newsApi.categories().then((d) => (newsCategories.value = d)).catch(() => {})
 
@@ -20,7 +17,6 @@ async function pollMarket() {
   try {
     const data = await marketApi.getSnapshot()
     market.value = data
-    tick.value++
     if (data.realtimeError) marketError.value = '系统繁忙，请稍后重试'
     else if (data.historyError) marketError.value = '服务器开小差了，请稍后重试'
     else marketError.value = ''
@@ -53,5 +49,5 @@ function logout() {
 }
 
 export function useApp() {
-  return { user, tick, toasts, toast, login, logout, market, marketError, strategies, frameworks, newsCategories }
+  return { user, toasts, toast, login, logout, market, marketError, frameworks, newsCategories }
 }

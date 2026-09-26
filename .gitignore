@@ -4,12 +4,19 @@ __pycache__/
 *$py.class
 *.so
 .Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
 env/
 venv/
 .venv/
 
 # 数据库连接配置（含密码，勿提交）
 db_config.py
+
+# 大模型 API 配置（含 API Key，勿提交）
+llm_config.py
 
 # 历史行情本地缓存（运行时自动生成，勿提交）
 _history_cache.json
@@ -19,6 +26,7 @@ node_modules/
 dist/
 .vite/
 *.local
+.eslintcache
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -32,11 +40,19 @@ pnpm-debug.log*
 # ===== 编辑器 / IDE =====
 .vscode/
 .idea/
+.trae/
+.history/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# ===== 临时文件 =====
+*.bak
+*.tmp
+*.pid
+~$*
 
 # ===== 系统文件 =====
 .DS_Store

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""数据引擎：行情、新闻、策略模板、账户、持仓等数据与生成逻辑。"""
+"""数据引擎：真实历史行情（Baostock）、实时快照（easyquotation）、财经新闻（财联社）与静态配置。"""
 import datetime
 import json
 import os
@@ -507,52 +507,6 @@ def news_error():
 
 def get_news_categories():
     return ['全部'] + [c for c, _ in _NEWS_CATEGORY_RULES]
-
-# ============ 量化策略模板 ============
-STRATEGIES = [
-    {
-        'id': 'ma_cross', 'name': '双均线交叉策略', 'type': '趋势跟踪', 'risk': '中', 'freq': '中频',
-        'desc': '快线上穿慢线形成金叉时满仓买入，死叉时清仓离场，捕捉中长期趋势。',
-        'params': [
-            {'key': 'fast', 'label': '快线周期(MA)', 'value': 5, 'min': 2, 'max': 30, 'step': 1},
-            {'key': 'slow', 'label': '慢线周期(MA)', 'value': 20, 'min': 10, 'max': 120, 'step': 1},
-        ],
-    },
-    {
-        'id': 'macd', 'name': 'MACD 趋势策略', 'type': '趋势跟踪', 'risk': '中', 'freq': '中频',
-        'desc': 'DIF 上穿 DEA 金叉买入，下穿死叉卖出，配合零轴过滤假信号。',
-        'params': [
-            {'key': 'fast', 'label': '快线EMA', 'value': 12, 'min': 5, 'max': 20, 'step': 1},
-            {'key': 'slow', 'label': '慢线EMA', 'value': 26, 'min': 15, 'max': 40, 'step': 1},
-            {'key': 'signal', 'label': '信号线DEA', 'value': 9, 'min': 5, 'max': 15, 'step': 1},
-        ],
-    },
-    {
-        'id': 'boll', 'name': '布林带均值回归', 'type': '震荡反转', 'risk': '中高', 'freq': '高频',
-        'desc': '价格触及布林带下轨超卖买入，触及上轨超买卖出，适合震荡行情。',
-        'params': [
-            {'key': 'period', 'label': '布林带周期', 'value': 20, 'min': 10, 'max': 60, 'step': 1},
-            {'key': 'mult', 'label': '标准差倍数', 'value': 2, 'min': 1, 'max': 3, 'step': 0.1},
-        ],
-    },
-    {
-        'id': 'rsi', 'name': 'RSI 超卖反弹策略', 'type': '震荡反转', 'risk': '中', 'freq': '中频',
-        'desc': 'RSI 低于超卖线买入，高于超买线卖出，捕捉短期超跌反弹机会。',
-        'params': [
-            {'key': 'period', 'label': 'RSI周期', 'value': 14, 'min': 6, 'max': 30, 'step': 1},
-            {'key': 'low', 'label': '超卖阈值', 'value': 30, 'min': 10, 'max': 40, 'step': 1},
-            {'key': 'high', 'label': '超买阈值', 'value': 70, 'min': 60, 'max': 90, 'step': 1},
-        ],
-    },
-    {
-        'id': 'momentum', 'name': '动量突破策略', 'type': '趋势跟踪', 'risk': '高', 'freq': '低频',
-        'desc': '价格突破 N 日最高价追涨买入，跌破 MA20 或触发止损线离场。',
-        'params': [
-            {'key': 'lookback', 'label': '突破回看周期', 'value': 20, 'min': 10, 'max': 60, 'step': 1},
-            {'key': 'stop', 'label': '止损比例(%)', 'value': 8, 'min': 3, 'max': 20, 'step': 1},
-        ],
-    },
-]
 
 # ============ 回测框架 ============
 BACKTEST_FRAMEWORKS = [

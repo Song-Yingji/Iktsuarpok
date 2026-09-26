@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApp } from '../store/app'
+import { resetAgentState } from '../store/agent'
 import { fmt, tone } from '../lib/utils'
 import Icon from './Icon.vue'
 import { ToastContainer } from './ui'
@@ -28,6 +29,7 @@ const dupItems = computed(() => [...items.value, ...items.value])
 const chgOf = (it) => (it.price - it.prevClose) / it.prevClose
 
 function doLogout() {
+  resetAgentState()
   logout()
   router.push('/login')
 }

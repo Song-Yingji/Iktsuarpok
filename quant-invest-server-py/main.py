@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """量化投资平台后端服务（FastAPI）。
 
-接口路径与响应格式与旧 Node/Express 版完全一致，前端零改动。
+提供鉴权、行情、新闻、偏好、智能体、策略回测、自选股、账户等 REST 接口。
 运行：python main.py  （默认端口 3000）
 """
 import asyncio
@@ -15,15 +15,16 @@ from contextlib import asynccontextmanager
 import pymysql
 from fastapi import FastAPI, Body, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 import uvicorn
 
 import auth
 import db
+import llm
 from data import (
     get_market, tick_market, get_news, news_error, refresh_news, get_news_categories,
-    STRATEGIES, BACKTEST_FRAMEWORKS,
+    BACKTEST_FRAMEWORKS,
     DEFAULT_PREFS,
 )
 from utils import hash_seed
@@ -326,13 +327,6 @@ async def market_snapshot():
     return get_market()
 
 
-@app.get('/api/market/kline/{code}')
-async def market_kline(code: str):
-    await asyncio.sleep(0.12)
-    s = next((x for x in get_market()['stocks'] if x['code'] == code), None)
-    return s['history'] if s else fail(404, '标的不存在')
-
-
 # ================= 新闻 =================
 @app.get('/api/news/categories')
 def news_categories():
@@ -410,7 +404,6 @@ REASON_TPL = [
     '波动率收敛后选择向上突破，布林带开口扩张',
 ]
 
-
 @app.post('/api/agent/recommend')
 async def agent_recommend(payload: dict = Body(default=None)):
     await asyncio.sleep(1.4)
@@ -447,91 +440,133 @@ async def agent_recommend(payload: dict = Body(default=None)):
     result.sort(key=lambda x: -x['score'])
     return result
 
+def _parse_strategy(text):
+    """解析模型输出的策略 JSON，对常见畸形做容错。
 
-@app.post('/api/agent/generate-strategy')
-async def agent_generate_strategy(payload: dict = Body(default=None)):
-    await asyncio.sleep(1.6)
-    p = (payload or {}).get('prompt') or ''
-    if re.search(r'macd|金叉', p, re.IGNORECASE):
-        return {
-            'name': 'AI-MACD 零轴金叉策略',
-            'type': '趋势跟踪',
-            'engineId': 'macd',
-            'params': {'fast': 12, 'slow': 26, 'signal': 9},
-            'rules': [
-                '入场：DIF 在零轴上方上穿 DEA（金叉），且当日成交量 > 5 日均量 1.2 倍',
-                '加仓：回踩 DEA 不破且红柱再次放大时加仓 50%',
-                '离场：DIF 下穿 DEA（死叉）或收盘跌破 20 日均线止损',
-                '风控：单笔亏损达 8% 强制止损，单票仓位不超过 30%',
-            ],
-            'code': '# 由策略生成智能体输出\n'
-                    'def init(ctx):\n'
-                    '    ctx.indicator(\'MACD\', fast=12, slow=26, signal=9)\n'
-                    '    ctx.indicator(\'MA\', period=20)\n'
-                    '\n'
-                    'def on_bar(ctx, bar):\n'
-                    '    macd = ctx.indicators[\'MACD\']\n'
-                    '    if macd.dif > 0 and ctx.cross_up(macd.dif, macd.dea) \\\n'
-                    '       and bar.volume > ctx.ma(\'volume\', 5) * 1.2:\n'
-                    '        ctx.buy(bar.symbol, weight=0.3)\n'
-                    '    if ctx.cross_down(macd.dif, macd.dea) or bar.close < ctx.ma(20):\n'
-                    '        ctx.sell_all(bar.symbol)',
-        }
-    if re.search(r'动量|轮动|突破|排名', p):
-        return {
-            'name': 'AI-多标的动量轮动策略',
-            'type': '动量轮动',
-            'engineId': 'momentum',
-            'params': {'lookback': 20, 'stop': 8},
-            'rules': [
-                '股票池：沪深300 成分股，每周五收盘后排名',
-                '入场：选取过去 20 日涨幅前 3 且站上 20 日均线的标的等权买入',
-                '换仓：排名跌出前 10 或跌破 20 日均线时卖出',
-                '风控：组合最大回撤超过 12% 时降仓至 50%',
-            ],
-            'code': 'def init(ctx):\n'
-                    '    ctx.universe = ctx.index_members(\'HS300\')\n'
-                    '    ctx.rebalance(\'weekly\')\n'
-                    '\n'
-                    'def on_rebalance(ctx):\n'
-                    '    ranked = ctx.rank(ctx.universe, \'momentum_20d\')\n'
-                    '    for s in ranked[:3]:\n'
-                    '        if ctx.close(s) > ctx.ma(s, 20):\n'
-                    '            ctx.buy(s, weight=1/3)\n'
-                    '    for pos in ctx.positions:\n'
-                    '        if pos.symbol not in ranked[:10]:\n'
-                    '            ctx.sell_all(pos.symbol)',
-        }
+    小模型容易产出两类非法 JSON：字符串值里含真实换行、数组/对象括号写错。
+    标准解析失败时退化为按字段正则提取，保证仍能拿到可保存的策略。
+    """
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    def pick_str(key):
+        m = re.search(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"' % key, text, re.S)
+        return m.group(1) if m else None
+
+    name = pick_str('name')
+    if not name:
+        return None
+
+    rules_m = re.search(r'"rules"\s*:\s*\[(.*?)(?:"code"|\]|$)', text, re.S)
+    rules = re.findall(r'"((?:[^"\\]|\\.)*)"', rules_m.group(1)) if rules_m else []
+
+    params_m = re.search(r'"params"\s*:\s*\{(.*?)\}', text, re.S)
+    params = {}
+    if params_m:
+        for k, v in re.findall(r'"([A-Za-z_]\w*)"\s*:\s*(-?\d+(?:\.\d+)?)', params_m.group(1)):
+            params[k] = float(v) if '.' in v else int(v)
+
     return {
-        'name': 'AI-双均线趋势策略',
-        'type': '趋势跟踪',
-        'engineId': 'ma_cross',
-        'params': {'fast': 5, 'slow': 20},
-        'rules': [
-            '入场：5 日均线上穿 20 日均线（金叉），次日开盘买入',
-            '离场：5 日均线下穿 20 日均线（死叉），次日开盘卖出',
-            '过滤：仅在 60 日均线向上时允许开仓，规避熊市',
-            '风控：单笔止损 8%，单票最大仓位 30%',
-        ],
-        'code': 'def init(ctx):\n'
-                '    ctx.indicator(\'MA\', 5)\n'
-                '    ctx.indicator(\'MA\', 20)\n'
-                '    ctx.indicator(\'MA\', 60)\n'
-                '\n'
-                'def on_bar(ctx, bar):\n'
-                '    if ctx.cross_up(ctx.ma(5), ctx.ma(20)) and ctx.ma(60).slope > 0:\n'
-                '        ctx.buy(bar.symbol, weight=0.3)\n'
-                '    if ctx.cross_down(ctx.ma(5), ctx.ma(20)):\n'
-                '        ctx.sell_all(bar.symbol)',
+        'name': name,
+        'type': pick_str('type') or '自定义策略',
+        'engineId': pick_str('engineId') or 'ma_cross',
+        'params': params,
+        'rules': rules,
+        'code': pick_str('code') or '',
     }
 
 
+@app.post('/api/agent/generate-strategy')
+async def agent_generate_strategy(payload: dict = Body(default=None)):
+    """策略生成智能体（SSE 流式）。
+
+    请求体：
+        messages: [{role: 'user'|'assistant', content: '...'}, ...]  多轮对话
+        或兼容旧格式：{ prompt: '...' }
+
+    响应（SSE）：
+        event: data: {"type":"text","content":"..."}\n\n
+               data: {"type":"strategy","data":{...}}\n\n
+               data: {"type":"done"}\n\n
+    """
+    p = payload or {}
+    messages = p.get('messages')
+    if not messages:
+        # 兼容旧格式：单条 prompt
+        prompt = p.get('prompt') or ''
+        messages = [{'role': 'user', 'content': prompt}]
+
+    def _sse(event_type, data):
+        return f'data: {json.dumps({"type": event_type, "data": data}, ensure_ascii=False)}\n\n'
+
+    def generate():
+        pending = ''            # 待发出的文本缓冲，防止标记被截断
+        in_strategy = False     # 是否正在策略 JSON 内部
+        strategy_buf = ''       # 策略 JSON 内容累积
+        start_tag = llm.STRATEGY_START
+        end_tag = llm.STRATEGY_END
+        tag_max_len = max(len(start_tag), len(end_tag))
+
+        for chunk in llm.chat_stream(messages):
+            if not in_strategy:
+                pending += chunk
+                # 检查是否遇到开始标记
+                while start_tag in pending:
+                    idx = pending.index(start_tag)
+                    # 策略前的引导文字直接丢弃，不发给前端
+                    pending = pending[idx + len(start_tag):]
+                    in_strategy = True
+                    strategy_buf = ''
+                    break
+
+                if not in_strategy:
+                    # 保留最后 tag_max_len 个字符在 pending 中，防止标记被截断
+                    if len(pending) > tag_max_len:
+                        emit = pending[:-tag_max_len]
+                        pending = pending[-tag_max_len:]
+                        # 策略前的引导文字已在检测到开始标记时丢弃
+                        # 这里发出的是：普通对话文本 或 策略后的补充说明
+                        yield _sse('text', emit)
+            else:
+                # 在策略 JSON 内部，累积到 strategy_buf
+                strategy_buf += chunk
+                # 检查是否遇到结束标记
+                while end_tag in strategy_buf:
+                    idx = strategy_buf.index(end_tag)
+                    json_str = strategy_buf[:idx].strip().strip('"\'\n\t ')
+                    # 剩余部分移到 pending，回到普通文本模式
+                    # 清理结束标记后的引号/空格/换行等噪音字符
+                    pending = strategy_buf[idx + len(end_tag):].lstrip('"\n\t \r\'')
+                    strategy_buf = ''
+                    in_strategy = False
+                    # 解析并发出策略事件（含畸形 JSON 容错）
+                    strategy = _parse_strategy(json_str)
+                    if strategy:
+                        yield _sse('strategy', strategy)
+                    else:
+                        # 无法恢复成策略，把整个策略块当普通文本发出
+                        yield _sse('text', start_tag + json_str + end_tag)
+                    break
+
+                if in_strategy:
+                    # 策略 JSON 内部不向客户端发文本（避免显示原始 JSON）
+                    pass
+
+        # ---- 流结束，清理剩余内容 ----
+        if in_strategy:
+            # 没遇到结束标记，把策略块整体当普通文本发出
+            yield _sse('text', start_tag + strategy_buf + pending)
+        else:
+            if pending:
+                yield _sse('text', pending)
+
+        yield _sse('done', {})
+
+    return StreamingResponse(generate(), media_type='text/event-stream')
+
 # ================= 策略 / 回测 =================
-@app.get('/api/strategy')
-def get_strategies():
-    return STRATEGIES
-
-
 @app.get('/api/strategy/frameworks')
 def get_frameworks():
     return BACKTEST_FRAMEWORKS

@@ -7,7 +7,7 @@ import { Card, Chip, Drawer, Button, Badge } from '../components/ui'
 import EChart from '../components/EChart.vue'
 import Icon from '../components/Icon.vue'
 
-const { tick, toast, market, marketError } = useApp()
+const { toast, market, marketError } = useApp()
 const watched = ref(new Set())
 
 onMounted(async () => {
