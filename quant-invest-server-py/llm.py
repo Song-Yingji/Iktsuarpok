@@ -96,7 +96,7 @@ STRATEGY_END = '===END_STRATEGY==='
 # 荐股 JSON 用 ===RECOMMEND_JSON=== 和 ===END_RECOMMEND=== 包裹。
 # 模型只负责主观字段（score/confidence/action/reasons），
 # 名称、板块、价格、涨跌幅由后端按 code 回填真实行情，避免模型编造数据。
-RECOMMEND_SYSTEM_PROMPT = '''你是 Quant Buffett 的智能选股分析师，负责基于用户给出的真实行情数据与技术因子，输出可解释的选股建议。
+RECOMMEND_SYSTEM_PROMPT = '''你是 Recommend Buffett，一位智能选股分析师，负责基于用户给出的真实行情数据与技术因子，输出可解释的选股建议。
 
 ## 工作方式
 

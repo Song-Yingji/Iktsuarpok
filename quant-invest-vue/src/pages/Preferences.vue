@@ -96,7 +96,8 @@ async function setDefault(item) {
   if (item.isDefault) return
   try {
     await prefsApi.setDefault(item.id)
-    await load()
+    // 就地更新默认标记，避免重新拉取列表导致卡片位置跳动
+    sets.value = sets.value.map((p) => ({ ...p, isDefault: p.id === item.id }))
     toast(`已将「${item.name}」设为默认偏好`)
   } catch (e) {
     toast(e.message, 'error')

@@ -380,10 +380,10 @@ def _prefset_fields(p):
 
 @app.get('/api/prefs')
 async def list_prefs(uid: int = Depends(get_current_user)):
-    """当前用户的全部偏好，默认偏好排在最前。"""
+    """当前用户的全部偏好，按创建顺序返回，切换默认偏好不改变列表顺序。"""
     await asyncio.sleep(0.1)
     rows = db.query(
-        'SELECT * FROM preference_sets WHERE user_id=%s ORDER BY is_default DESC, id', (uid,))
+        'SELECT * FROM preference_sets WHERE user_id=%s ORDER BY id', (uid,))
     return [_row_to_prefset(r) for r in rows]
 
 

@@ -5,8 +5,8 @@
 ## 功能特性
 
 - **真实行情引擎**：24 只 A 股 + 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
-- **AI 策略生成**：用自然语言描述投资想法，大模型流式返回对话内容与结构化策略，可一键保存到「我的量化策略」
-- **AI 智能荐股**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
+- **AI 策略生成（Quant Buffett）**：用自然语言描述投资想法，大模型流式返回对话内容与结构化策略，可一键保存到「我的量化策略」
+- **AI 智能荐股（Recommend Buffett）**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
 - **策略回测**：内置双均线、MACD、布林带、RSI、动量突破 5 种回测引擎，选择标的 / 区间 / 框架即可回测
 - **回测指标**：总收益、年化收益、最大回撤、夏普比率、CVaR、胜率、盈亏比等
 - **账户管理**：模拟盘 / 实盘账户独立管理，支持新增、解绑、绑定已保存策略与自动交易开关
@@ -26,7 +26,7 @@
 ## 目录结构
 
 ```
-myProject/
+Iktsuarpok/
 ├── quant-invest-server-py/       # Python 后端（FastAPI）
 │   ├── main.py                   # 路由、鉴权、指标计算、回测、智能体 SSE 接口
 │   ├── data.py                   # 行情 / 新闻数据引擎与静态配置
@@ -49,7 +49,6 @@ myProject/
 │   ├── index.html
 │   └── package.json
 ├── database_schema.sql           # 数据库建库建表脚本
-├── migration_preference_sets.sql # 老库升级脚本（单套偏好 → 多套偏好）
 ├── 一键启动量化系统.bat          # 一键启动前后端（Windows）
 └── 停止量化系统.bat              # 停止前后端服务
 ```
@@ -72,14 +71,6 @@ mysql -u root -p --default-character-set=utf8mb4 < database_schema.sql
 
 然后在 `quant-invest-server-py/db_config.py` 中填写连接信息（默认 `127.0.0.1:3306`，用户 `root`）。
 
-> 若你的数据库是**旧版本**（已有 `user_preferences` 表、且偏好只有一套），不要重新执行 `database_schema.sql`，改为执行一次升级脚本即可把旧偏好迁成多套偏好结构：
->
-> ```bash
-> mysql -u root -p --default-character-set=utf8mb4 < migration_preference_sets.sql
-> ```
->
-> 该脚本会把 `user_preferences` 改名为 `preference_sets`、补齐 `name` / `is_default` 字段，并把交易提醒迁到新的 `user_settings` 表，已有偏好数据不会丢失。
-
 ### 2. 配置大模型
 
 在 `quant-invest-server-py/llm_config.py` 中填写 OpenAI 兼容接口的配置：
@@ -88,7 +79,7 @@ mysql -u root -p --default-character-set=utf8mb4 < database_schema.sql
 # -*- coding: utf-8 -*-
 API_BASE_URL = 'https://your-endpoint/v1'   # 需以 /v1 结尾
 API_KEY = 'your-api-key'
-MODEL_NAME = 'mimo-v2.6-pro'
+MODEL_NAME = 'your-model-name'
 ```
 
 > 可切换为任意 OpenAI 兼容服务（含本地 Ollama，`API_BASE_URL` 填 `http://localhost:11434/v1` 即可）。模型越小对长系统提示词的指令遵循越弱，建议使用 7B 以上模型以保证策略 JSON 的格式正确率。
@@ -121,7 +112,7 @@ npm run dev
 - 市场行情：个股与指数快照、K 线、Sparkline 迷你走势，个股可一键加自选
 - 自选股：关注的个股实时行情与移除
 - 财经资讯：分类浏览与关键词搜索
-- AI 智能体：智能荐股、策略生成（流式对话）
+- AI 智能体：智能荐股（Recommend Buffett）、策略生成（Quant Buffett），均为流式对话
 - 量化策略：已保存的智能体策略列表、删除、选择回测标的 / 区间 / 框架并查看回测结果
 - 账户管理：账户列表、新增 / 解绑账户、绑定已保存策略、自动交易开关，以及全局设置（交易提醒）
 - 投资偏好：多套偏好的列表管理，新增 / 编辑通过弹窗完成，可设为默认供荐股使用
@@ -211,7 +202,7 @@ flowchart LR
 
 > 历史 K 线只保留到最近一个已收盘交易日，今日行情交给实时源，二者严格分离，避免盘中实时价污染回测口径。
 
-### 4. AI 智能体：智能荐股流程
+### 4. AI 智能体：智能荐股流程（Recommend Buffett）
 
 ```mermaid
 flowchart TD
@@ -235,7 +226,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[偏好页] --> B[GET /api/prefs<br/>列表：默认偏好排在最前]
+    A[偏好页] --> B[GET /api/prefs<br/>列表：按创建顺序返回]
     B --> C{操作}
     C -- 添加偏好 --> D[弹出偏好表单<br/>名称 + 风险 / 期限 / 板块 / 风控]
     D --> E{点击保存?}
@@ -253,7 +244,7 @@ flowchart TD
 > 偏好名称在同一用户下唯一；用户保存的第一套偏好自动成为默认偏好。
 > 交易提醒等开关与偏好无关，单独存在 `user_settings`，在账户页的「全局设置」中配置。
 
-### 5. AI 智能体：策略生成流式流程
+### 5. AI 智能体：策略生成流式流程（Quant Buffett）
 
 ```mermaid
 sequenceDiagram
@@ -348,7 +339,7 @@ flowchart TD
 | GET | `/api/market/snapshot` | 行情快照（含全部标的与历史 K 线） |
 | GET | `/api/news` | 新闻列表（财联社实时快讯，支持分类 / 关键字） |
 | GET | `/api/news/categories` | 新闻分类 |
-| GET | `/api/prefs` | 偏好列表（多套，默认偏好排在最前） |
+| GET | `/api/prefs` | 偏好列表（多套，按创建顺序返回） |
 | POST | `/api/prefs` | 新增一套偏好（首套自动设为默认） |
 | PUT | `/api/prefs/{id}` | 编辑偏好 |
 | POST | `/api/prefs/{id}/default` | 设为荐股默认偏好 |
