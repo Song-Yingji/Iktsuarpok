@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { runBacktest, strategyApi } from '../api'
 import { fmt, tone } from '../lib/utils'
-import { Card, Button, Badge, Field, Steps, Empty } from '../components/ui'
+import { Card, Button, Badge, Field, Steps } from '../components/ui'
 import EChart from '../components/EChart.vue'
 import Icon from '../components/Icon.vue'
 import { useApp } from '../store/app'
@@ -14,7 +14,6 @@ const RANGES = [
   { label: '近 1 年', value: 240 }
 ]
 
-// 价格走势 + 买卖点标记
 function priceChartOption(result) {
   const { candles, points } = result
   const dates = candles.map((c) => c.date)
@@ -47,7 +46,6 @@ function priceChartOption(result) {
   }
 }
 
-// 资金曲线 vs 基准
 function equityChartOption(result) {
   const { equity, capital } = result
   return {
@@ -75,7 +73,6 @@ function equityChartOption(result) {
   }
 }
 
-// 回撤曲线
 function drawdownChartOption(result) {
   const { equity } = result
   let peak = -Infinity
@@ -183,14 +180,8 @@ onMounted(load)
         <h1>量化策略与回测</h1>
         <p>展示智能体生成并保存的策略，选择回测标的、区间和框架，用历史数据验证策略有效性</p>
       </div>
-      <div class="page-actions">
-        <Button icon="bolt" :loading="running" :disabled="!selected" @click="run">
-          {{ running ? '回测进行中…' : '运行回测' }}
-        </Button>
-      </div>
     </div>
 
-    <!-- 已保存的策略 -->
     <Card title="① 选择量化策略">
       <div v-if="loading" style="text-align:center;padding:32px;color:var(--text-3)">策略加载中…</div>
       <div v-else-if="!saved.length" class="empty-state" style="padding: 32px 20px">
@@ -222,7 +213,6 @@ onMounted(load)
       </div>
     </Card>
 
-    <!-- 回测设置 -->
     <div class="grid mt-16" style="gap: 12px">
       <Card title="② 回测设置（标的 · 区间 · 框架）">
         <div class="grid grid-2" style="gap: 20px 24px">
@@ -265,17 +255,22 @@ onMounted(load)
       </Card>
     </div>
 
-    <!-- 回测进度 -->
-    <Card v-if="running" class="mt-16">
-      <Steps :steps="RUN_STEPS" :current="step" />
-      <div style="text-align: center; color: var(--text-3); font-size: 12.5px">
-        正在使用 {{ frameworkName }} 执行回测，逐K线模拟 {{ rangeDays }} 个交易日…
+    <Card class="mt-16" title="③ 回测分析">
+      <template #extra>
+        <Button icon="bolt" :loading="running" :disabled="!selected" @click="run">
+          {{ running ? '回测进行中…' : '运行回测' }}
+        </Button>
+      </template>
+      <div v-if="running">
+        <Steps :steps="RUN_STEPS" :current="step" />
+        <div style="text-align: center; color: var(--text-3); font-size: 12.5px; margin-top: 8px">
+          正在使用 {{ frameworkName }} 执行回测，逐K线模拟 {{ rangeDays }} 个交易日…
+        </div>
       </div>
-    </Card>
-
-    <!-- 未回测 -->
-    <Card v-if="!running && !result" class="mt-16">
-      <Empty text="选择一个已保存的策略并配置回测设置，点击「运行回测」，这里将展示买卖点、资金曲线与绩效评价" />
+      <div v-else-if="!result" class="empty-state" style="padding: 24px 20px">
+        <Icon name="chart" :size="28" />
+        <p>点击「运行回测」，这里将展示买卖点、资金曲线与绩效评价</p>
+      </div>
     </Card>
 
     <template v-if="result">

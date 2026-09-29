@@ -9,6 +9,7 @@ export const HORIZONS = ['短线（1个月内）', '中线（1-6个月）', '长
 export const BENCHMARKS = ['沪深300', '上证指数', '中证500', '创业板指']
 
 // 注意：默认值需与后端 quant-invest-server-py/data.py 的 DEFAULT_PREFS 保持一致，修改请同步两边
+// 交易提醒已改为与偏好无关的全局设置（账户页配置），不再属于偏好
 export const DEFAULT_PREFS = {
   risk: '稳健型',
   horizon: '中线（1-6个月）',
@@ -16,6 +17,5 @@ export const DEFAULT_PREFS = {
   maxPosition: 25,
   stopLoss: 8,
   takeProfit: 30,
-  tradeNotify: true,
   benchmark: '沪深300'
 }

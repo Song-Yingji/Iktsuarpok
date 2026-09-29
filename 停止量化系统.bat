@@ -1,10 +1,10 @@
 @echo off
 setlocal enabledelayedexpansion
 chcp 936 >nul
-title QuantAI 量化投资系统 - 停止服务
+title Iktsuarpok 量化投资系统 - 停止服务
 
 echo ============================================================
-echo    QuantAI 智能量化投资系统 - 停止服务
+echo    Iktsuarpok 智能量化投资系统 - 停止服务
 echo ============================================================
 echo.
 

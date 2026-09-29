@@ -1,5 +1,5 @@
 -- ============================================================
--- QuantAI 智能量化投资系统 - MySQL 数据库建表脚本
+-- Iktsuarpok 智能量化投资系统 - MySQL 数据库建表脚本
 -- 数据库版本：MySQL 5.7+（JSON 类型需 5.7+，推荐 8.0）
 -- 字符集：utf8mb4（支持中文与 emoji），排序规则 utf8mb4_unicode_ci
 -- 覆盖范围：仅用户动态数据（静态配置如股票清单/策略模板/回测框架仍留在代码）
@@ -8,7 +8,10 @@
 --   users（无外键依赖）先建；
 --   saved_strategies 依赖 users；
 --   accounts 依赖 users + saved_strategies，故在两者之后；
---   user_preferences / watchlist 只依赖 users。
+--   preference_sets / user_settings / watchlist 只依赖 users。
+--
+-- 注意：偏好支持多套（1 用户 : N 套），交易提醒开关已从偏好中剥离，
+--       作为与偏好无关的全局设置存入 user_settings。
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS xb_quant
@@ -36,13 +39,17 @@ CREATE TABLE users (
   COMMENT='用户表';
 
 -- ------------------------------------------------------------
--- 2. 投资偏好表（1 用户 : 1 偏好）
+-- 2. 投资偏好表（1 用户 : N 套）
 -- 对应 data.py 的 DEFAULT_PREFS、/api/prefs
+-- name 为用户自定义的偏好名称，同一用户下唯一
+-- is_default 标记荐股时默认使用的那一套，同一用户至多一套为 1（由后端保证）
 -- sectors（偏好行业数组）用 JSON 存，如 ["新能源","人工智能","医药生物"]
+-- 注意：交易提醒开关不在此表，见 user_settings
 -- ------------------------------------------------------------
-CREATE TABLE user_preferences (
+CREATE TABLE preference_sets (
   id           INT UNSIGNED    NOT NULL AUTO_INCREMENT COMMENT '偏好ID',
   user_id      INT UNSIGNED    NOT NULL                COMMENT '所属用户ID',
+  name         VARCHAR(50)     NOT NULL                COMMENT '偏好名称（用户自定义，同用户下唯一）',
   risk         VARCHAR(20)     NOT NULL DEFAULT '稳健型' COMMENT '风险等级：保守型/稳健型/平衡型/进取型/激进型',
   horizon      VARCHAR(30)     NOT NULL DEFAULT '中线（1-6个月）' COMMENT '投资期限：短线/中线/长线',
   benchmark    VARCHAR(20)     NOT NULL DEFAULT '沪深300' COMMENT '业绩比较基准',
@@ -50,13 +57,29 @@ CREATE TABLE user_preferences (
   max_position TINYINT UNSIGNED NOT NULL DEFAULT 25     COMMENT '单票最大仓位（%）',
   stop_loss    TINYINT UNSIGNED NOT NULL DEFAULT 8      COMMENT '止损线（%）',
   take_profit  TINYINT UNSIGNED NOT NULL DEFAULT 30     COMMENT '止盈线（%）',
-  trade_notify TINYINT(1)      NOT NULL DEFAULT 1      COMMENT '交易提醒开关：1开 0关',
+  is_default   TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '荐股默认偏好：1是 0否',
+  created_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_prefs_user (user_id),
-  CONSTRAINT fk_prefs_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+  UNIQUE KEY uk_prefset_user_name (user_id, name),
+  CONSTRAINT fk_prefset_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='用户投资偏好（1:1）';
+  COMMENT='用户投资偏好（1 用户 : N 套）';
+
+-- ------------------------------------------------------------
+-- 2.1 用户全局设置表（1 用户 : 1）
+-- 与投资偏好无关的开关，目前承载「交易提醒」
+-- ------------------------------------------------------------
+CREATE TABLE user_settings (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '设置ID',
+  user_id      INT UNSIGNED NOT NULL                COMMENT '所属用户ID',
+  trade_notify TINYINT(1)   NOT NULL DEFAULT 1      COMMENT '交易提醒开关：1开 0关',
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_settings_user (user_id),
+  CONSTRAINT fk_settings_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='用户全局设置（与偏好无关）';
 
 -- ------------------------------------------------------------
 -- 3. 已保存的量化策略表（1 用户 : N 策略）

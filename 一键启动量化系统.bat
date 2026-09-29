@@ -1,13 +1,13 @@
 @echo off
 chcp 936 >nul
 setlocal enabledelayedexpansion
-title QuantAI 智能量化投资系统 - 一键启动
+title Iktsuarpok 智能量化投资系统 - 一键启动
 
 set "BACKEND_DIR=%~dp0quant-invest-server-py"
 set "FRONTEND_DIR=%~dp0quant-invest-vue"
 
 echo ============================================================
-echo    QuantAI 智能量化投资系统 - 一键启动
+echo    Iktsuarpok 智能量化投资系统 - 一键启动
 echo ============================================================
 echo    后端服务 : http://localhost:3000   (Python FastAPI)
 echo    前端页面 : http://localhost:5189
@@ -61,7 +61,7 @@ if !errorlevel!==0 (
     echo        后端服务已在运行，跳过。
 ) else (
     pushd "%BACKEND_DIR%"
-    start "QuantAI-后端-3000" /MIN "%PYTHON_EXE%" -s main.py
+    start "Iktsuarpok-后端-3000" /MIN "%PYTHON_EXE%" -s main.py
     popd
     echo        后端服务已启动。
 )
@@ -72,7 +72,7 @@ if !errorlevel!==0 (
     echo        前端服务已在运行，跳过。
 ) else (
     pushd "%FRONTEND_DIR%"
-    start "QuantAI-前端-5189" /MIN "%NODE_EXE%" node_modules\vite\bin\vite.js
+    start "Iktsuarpok-前端-5189" /MIN "%NODE_EXE%" node_modules\vite\bin\vite.js
     popd
     echo        前端服务已启动。
 )

@@ -41,7 +41,7 @@ function doLogout() {
       <div class="logo">
         <span class="logo-mark"><Icon name="bolt" :size="18" /></span>
         <div>
-          <strong>QuantAI</strong>
+          <strong>Iktsuarpok</strong>
           <small>智能量化投资平台</small>
         </div>
       </div>

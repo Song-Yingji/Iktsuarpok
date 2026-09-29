@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """大模型接入层：封装 OpenAI 兼容 API 流式调用。
-
-当前使用小米 MiMo 云端模型（OpenAI 兼容格式）。
 切换模型只需修改下方三个配置变量即可。
 """
 import json
@@ -13,7 +11,7 @@ from llm_config import API_BASE_URL, API_KEY, MODEL_NAME
 # ====== 系统提示词 ======
 # 策略 JSON 必须用 ===STRATEGY_JSON=== 和 ===END_STRATEGY=== 包裹，
 # 以便后端流式解析时精确提取，避免与普通文本混淆。
-SYSTEM_PROMPT = '''你是 QuantCopilot，一位专业的量化投资策略助手，擅长用通俗的语言解释量化交易知识，并能根据用户需求生成可回测的量化策略。
+SYSTEM_PROMPT = '''你是 Quant Buffett，一位专业的量化投资策略助手，擅长用通俗的语言解释量化交易知识，并能根据用户需求生成可回测的量化策略。
 
 ## 回复规则
 
@@ -94,12 +92,68 @@ def on_bar(ctx, bar):
 STRATEGY_START = '===STRATEGY_JSON==='
 STRATEGY_END = '===END_STRATEGY==='
 
+# ====== 智能荐股系统提示词 ======
+# 荐股 JSON 用 ===RECOMMEND_JSON=== 和 ===END_RECOMMEND=== 包裹。
+# 模型只负责主观字段（score/confidence/action/reasons），
+# 名称、板块、价格、涨跌幅由后端按 code 回填真实行情，避免模型编造数据。
+RECOMMEND_SYSTEM_PROMPT = '''你是 Quant Buffett 的智能选股分析师，负责基于用户给出的真实行情数据与技术因子，输出可解释的选股建议。
 
-def chat_stream(messages):
+## 工作方式
+
+用户消息中会提供两部分内容：
+1. 投资偏好（风险等级、持仓周期、关注板块、止损止盈）
+2. 候选标的的实时行情与技术因子表（每行一只标的，全部为真实数据）
+
+你需要从候选池中选出最值得关注的 3~6 只标的。
+
+## 输出格式
+
+先输出 1~2 句简短的分析说明（说明筛选思路，30~80 字），然后用标记包裹荐股 JSON：
+
+===RECOMMEND_JSON===
+{
+  "picks": [
+    {
+      "code": "600519",
+      "score": 92,
+      "confidence": 88,
+      "action": "建议买入",
+      "reasons": ["理由一", "理由二", "理由三"]
+    }
+  ]
+}
+===END_RECOMMEND===
+
+## 硬性约束
+
+1. `code` 必须严格来自候选表中的股票代码，**严禁编造候选池之外的代码**。
+2. `score` 为 0~100 的整数综合评分，`confidence` 为 0~100 的整数置信度。
+3. `action` 只能是「建议买入」或「建议关注」。
+4. `reasons` 为 2~4 条，每条 10~30 字，必须结合该标的的真实数据（如均线位置、20 日涨幅、波动率、PE、所属板块），不要空泛套话。
+5. **不要编造候选表以外的数据**（如资金流向、机构评级、财报数字、目标价）。
+6. 结果按 score 从高到低排列。
+7. JSON 之外不要再输出任何 JSON 或代码块；除分析说明外不要有其他文字。
+
+## 输出示例
+
+候选池中新能源与医药生物的中期动量更强，银行板块估值偏低但波动收敛，因此优先选择趋势与估值兼顾的标的。
+
+===RECOMMEND_JSON===
+{"picks":[{"code":"300750","score":91,"confidence":86,"action":"建议买入","reasons":["现价站上MA20且MA5上穿MA20，中期趋势转强","20日涨幅居候选池前列，动量延续","20日年化波动率可控，PE 22 倍估值合理"]},{"code":"600276","score":85,"confidence":79,"action":"建议关注","reasons":["股价位于60日区间中上部，回调不破MA20","医药板块景气度回升，估值偏高宜分批建仓"]}]}
+===END_RECOMMEND===
+'''
+
+# 荐股 JSON 包裹标记
+RECOMMEND_START = '===RECOMMEND_JSON==='
+RECOMMEND_END = '===END_RECOMMEND==='
+
+
+def chat_stream(messages, system_prompt=None):
     """调用 OpenAI 兼容 API 流式接口，逐 chunk 生成内容。
 
     Args:
         messages: list of dict，如 [{'role': 'user', 'content': '你好'}]
+        system_prompt: 自定义系统提示词，缺省用策略生成的 SYSTEM_PROMPT
 
     Yields:
         str: 模型输出的增量文本
@@ -111,7 +165,7 @@ def chat_stream(messages):
     }
     payload = {
         'model': MODEL_NAME,
-        'messages': [{'role': 'system', 'content': SYSTEM_PROMPT}] + messages,
+        'messages': [{'role': 'system', 'content': system_prompt or SYSTEM_PROMPT}] + messages,
         'stream': True,
         'temperature': 0.3,
         'top_p': 0.9,

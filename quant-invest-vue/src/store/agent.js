@@ -8,14 +8,13 @@ import { useApp } from './app'
 
 const { toast } = useApp()
 
-const GREETING = '你好，我是策略生成智能体 QuantCopilot。你可以和我聊投资知识，也可以用自然语言描述投资想法（例如「MACD 金叉买入、放量突破」），我会生成可回测的量化策略。'
+const GREETING = '你好，我是策略生成智能体 Quant Buffett。你可以和我聊投资知识，也可以用自然语言描述投资想法（例如「MACD 金叉买入、放量突破」），我会生成可回测的量化策略。'
 
 // ---------------- 策略生成智能体 ----------------
 const messages = ref([{ role: 'bot', text: GREETING, typing: false, greeting: true }])
 const input = ref('')
 const typing = ref(false)
-// 非响应式：仅用于中断流式请求，不参与渲染
-let cancelStream = null
+let cancelStream = null  // 非响应式：中断流式请求
 
 function buildHistory() {
   // 策略消息转成摘要文本，避免空的 assistant 回复干扰模型
@@ -40,7 +39,6 @@ function send(text) {
 
   messages.value.push({ role: 'user', text: prompt })
 
-  // 占位的 bot 消息，流式填充
   const botMsg = { role: 'bot', text: '', typing: true, strategy: null, saved: false }
   messages.value.push(botMsg)
 
@@ -88,29 +86,85 @@ async function saveStrategy(msg) {
 const REC_STEPS = ['扫描全市场', '技术面分析', '基本面筛选', 'AI 综合评分']
 
 const recs = ref(null)
+const recText = ref('')
 const recRunning = ref(false)
 const recStep = ref(-1)
 const watchedCodes = ref(new Set())
-let prefs = null
+const prefSets = ref([])
+const prefId = ref(null)
+let cancelRec = null   // 非响应式：中断流式请求
+let recTimer = null    // 非响应式：步骤进度定时器
 
-// 每次进入页面重新拉取偏好与自选，保证自选状态是最新的
+// 每次进入页面重新拉取偏好与自选，保证自选状态与偏好列表是最新的
 function loadRecoDeps() {
-  prefsApi.get().then((p) => (prefs = p)).catch(() => {})
+  prefsApi.list()
+    .then((list) => {
+      prefSets.value = list
+      // 选中的偏好已被删除、或首次进入时，回落到默认偏好
+      if (!list.some((p) => p.id === prefId.value)) {
+        const def = list.find((p) => p.isDefault) || list[0]
+        prefId.value = def ? def.id : null
+      }
+    })
+    .catch(() => {})
   watchlistApi.list().then((list) => (watchedCodes.value = new Set(list.map((s) => s.code)))).catch(() => {})
 }
 
-async function runRecommend() {
+function finishRecommend() {
+  if (recTimer) {
+    clearInterval(recTimer)
+    recTimer = null
+  }
+  cancelRec = null
+  recRunning.value = false
+  recStep.value = -1
+}
+
+function runRecommend() {
+  if (recRunning.value) return
+
   recRunning.value = true
   recs.value = null
-  for (let i = 0; i < REC_STEPS.length; i++) {
-    recStep.value = i
-    await new Promise((r) => setTimeout(r, 550))
+  recText.value = ''
+  recStep.value = 0
+
+  // 步骤条随时间推进，收到结果后停在最后一步
+  recTimer = setInterval(() => {
+    if (recStep.value < REC_STEPS.length - 1) recStep.value += 1
+  }, 900)
+
+  cancelRec = agentApi.recommendStream(prefId.value, {
+    onText(chunk) {
+      recText.value += chunk
+      if (recStep.value < 1) recStep.value = 1
+    },
+    onRecommend(data) {
+      recs.value = data
+      recStep.value = REC_STEPS.length - 1
+    },
+    onDone() {
+      finishRecommend()
+      toast('荐股智能体已完成本轮分析')
+    },
+    onError(err) {
+      recText.value += `\n\n[出错了] ${err.message || err}`
+      finishRecommend()
+    }
+  })
+}
+
+function stopRecommend() {
+  if (cancelRec) {
+    cancelRec()
+    cancelRec = null
   }
-  const data = await agentApi.recommend(prefs)
-  recs.value = data
-  recStep.value = -1
+  if (recTimer) {
+    clearInterval(recTimer)
+    recTimer = null
+  }
   recRunning.value = false
-  toast('荐股智能体已完成本轮分析')
+  recStep.value = -1
+  if (recText.value && !recs.value) recText.value += '\n\n（已停止分析）'
 }
 
 async function addWatch(r) {
@@ -125,14 +179,24 @@ function resetAgentState() {
     cancelStream()
     cancelStream = null
   }
+  if (cancelRec) {
+    cancelRec()
+    cancelRec = null
+  }
+  if (recTimer) {
+    clearInterval(recTimer)
+    recTimer = null
+  }
   messages.value = [{ role: 'bot', text: GREETING, typing: false, greeting: true }]
   input.value = ''
   typing.value = false
   recs.value = null
+  recText.value = ''
   recRunning.value = false
   recStep.value = -1
   watchedCodes.value = new Set()
-  prefs = null
+  prefSets.value = []
+  prefId.value = null
 }
 
 export function useAgentChat() {
@@ -140,7 +204,10 @@ export function useAgentChat() {
 }
 
 export function useRecommendAgent() {
-  return { REC_STEPS, recs, recRunning, recStep, watchedCodes, loadRecoDeps, runRecommend, addWatch }
+  return {
+    REC_STEPS, recs, recText, recRunning, recStep, watchedCodes, prefSets, prefId,
+    loadRecoDeps, runRecommend, stopRecommend, addWatch
+  }
 }
 
 export { resetAgentState }

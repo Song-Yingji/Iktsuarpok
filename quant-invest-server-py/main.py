@@ -27,7 +27,6 @@ from data import (
     BACKTEST_FRAMEWORKS,
     DEFAULT_PREFS,
 )
-from utils import hash_seed
 
 PORT = 3000
 LATENCY = 0.2  # 模拟网络延迟（秒）
@@ -345,9 +344,11 @@ async def news(category: str = None, keyword: str = None):
     return {'items': result, 'error': err}
 
 
-# ================= 投资偏好 =================
-def _row_to_prefs(row):
+# ================= 投资偏好（1 用户 : N 套） =================
+def _row_to_prefset(row):
     return {
+        'id': row['id'],
+        'name': row['name'],
         'risk': row['risk'],
         'horizon': row['horizon'],
         'benchmark': row['benchmark'],
@@ -355,90 +356,177 @@ def _row_to_prefs(row):
         'maxPosition': row['max_position'],
         'stopLoss': row['stop_loss'],
         'takeProfit': row['take_profit'],
-        'tradeNotify': bool(row['trade_notify']),
+        'isDefault': bool(row['is_default']),
+        'updatedAt': row['updated_at'].strftime('%Y-%m-%d'),
     }
 
 
+def _prefset_fields(p):
+    """从请求体取出偏好字段，缺省或 null 一律用 DEFAULT_PREFS 兜底。"""
+    def val(key):
+        v = p.get(key)
+        return DEFAULT_PREFS[key] if v is None else v
+
+    return (
+        val('risk'),
+        val('horizon'),
+        val('benchmark'),
+        json.dumps(val('sectors'), ensure_ascii=False),
+        val('maxPosition'),
+        val('stopLoss'),
+        val('takeProfit'),
+    )
+
+
 @app.get('/api/prefs')
-async def get_prefs(uid: int = Depends(get_current_user)):
+async def list_prefs(uid: int = Depends(get_current_user)):
+    """当前用户的全部偏好，默认偏好排在最前。"""
     await asyncio.sleep(0.1)
-    row = db.query_one('SELECT * FROM user_preferences WHERE user_id=%s', (uid,))
-    return _row_to_prefs(row) if row else dict(DEFAULT_PREFS)
+    rows = db.query(
+        'SELECT * FROM preference_sets WHERE user_id=%s ORDER BY is_default DESC, id', (uid,))
+    return [_row_to_prefset(r) for r in rows]
 
 
 @app.post('/api/prefs')
-async def save_prefs(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+async def create_prefs(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    """新增一套偏好；用户的第一套自动成为默认偏好。"""
     await asyncio.sleep(LATENCY)
     p = payload or {}
+    name = (p.get('name') or '').strip()
+    if not name:
+        return fail(400, '请填写偏好名称')
+    if db.query_one('SELECT id FROM preference_sets WHERE user_id=%s AND name=%s', (uid, name)):
+        return fail(409, '偏好名称已存在')
+
+    fields = _prefset_fields(p)
+    is_default = 1 if not db.query_one('SELECT id FROM preference_sets WHERE user_id=%s', (uid,)) else 0
+    pid = db.insert(
+        'INSERT INTO preference_sets '
+        '(user_id, name, risk, horizon, benchmark, sectors, max_position, stop_loss, take_profit, is_default) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+        (uid, name) + fields + (is_default,),
+    )
+    return _row_to_prefset(db.query_one('SELECT * FROM preference_sets WHERE id=%s', (pid,)))
+
+
+@app.put('/api/prefs/{pref_id}')
+async def update_prefs(pref_id: int, payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    """编辑一套偏好；默认标记不在此处变更，切换走 /default 接口。"""
+    await asyncio.sleep(LATENCY)
+    row = db.query_one('SELECT * FROM preference_sets WHERE id=%s AND user_id=%s', (pref_id, uid))
+    if not row:
+        return fail(404, '偏好不存在')
+    p = payload or {}
+    name = (p.get('name') or row['name']).strip()
+    if not name:
+        return fail(400, '请填写偏好名称')
+    if db.query_one('SELECT id FROM preference_sets WHERE user_id=%s AND name=%s AND id<>%s', (uid, name, pref_id)):
+        return fail(409, '偏好名称已存在')
+
+    fields = _prefset_fields(p)
     db.execute(
-        'INSERT INTO user_preferences '
-        '(user_id, risk, horizon, benchmark, sectors, max_position, stop_loss, take_profit, trade_notify) '
-        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) '
-        'ON DUPLICATE KEY UPDATE risk=VALUES(risk), horizon=VALUES(horizon), benchmark=VALUES(benchmark), '
-        'sectors=VALUES(sectors), max_position=VALUES(max_position), stop_loss=VALUES(stop_loss), '
-        'take_profit=VALUES(take_profit), trade_notify=VALUES(trade_notify)',
-        (
-            uid,
-            p.get('risk', DEFAULT_PREFS['risk']),
-            p.get('horizon', DEFAULT_PREFS['horizon']),
-            p.get('benchmark', DEFAULT_PREFS['benchmark']),
-            json.dumps(p.get('sectors') or [], ensure_ascii=False),
-            p.get('maxPosition', DEFAULT_PREFS['maxPosition']),
-            p.get('stopLoss', DEFAULT_PREFS['stopLoss']),
-            p.get('takeProfit', DEFAULT_PREFS['takeProfit']),
-            1 if p.get('tradeNotify', DEFAULT_PREFS['tradeNotify']) else 0,
-        ),
+        'UPDATE preference_sets SET name=%s, risk=%s, horizon=%s, benchmark=%s, sectors=%s, '
+        'max_position=%s, stop_loss=%s, take_profit=%s WHERE id=%s AND user_id=%s',
+        (name,) + fields + (pref_id, uid),
+    )
+    return _row_to_prefset(db.query_one('SELECT * FROM preference_sets WHERE id=%s', (pref_id,)))
+
+
+@app.post('/api/prefs/{pref_id}/default')
+async def set_default_prefs(pref_id: int, uid: int = Depends(get_current_user)):
+    """把指定偏好设为荐股默认偏好，同一用户只保留一个默认。"""
+    await asyncio.sleep(0.1)
+    if not db.query_one('SELECT id FROM preference_sets WHERE id=%s AND user_id=%s', (pref_id, uid)):
+        return fail(404, '偏好不存在')
+    db.execute_tx([
+        ('UPDATE preference_sets SET is_default=0 WHERE user_id=%s AND id<>%s', (uid, pref_id)),
+        ('UPDATE preference_sets SET is_default=1 WHERE id=%s AND user_id=%s', (pref_id, uid)),
+    ])
+    return {'ok': True}
+
+
+@app.delete('/api/prefs/{pref_id}')
+async def delete_prefs(pref_id: int, uid: int = Depends(get_current_user)):
+    """删除一套偏好；若删掉的是默认偏好，自动把剩余的第一套提为默认。"""
+    await asyncio.sleep(0.1)
+    row = db.query_one('SELECT * FROM preference_sets WHERE id=%s AND user_id=%s', (pref_id, uid))
+    if not row:
+        return fail(404, '偏好不存在')
+    db.execute('DELETE FROM preference_sets WHERE id=%s AND user_id=%s', (pref_id, uid))
+    if row['is_default']:
+        rest = db.query_one(
+            'SELECT id FROM preference_sets WHERE user_id=%s ORDER BY id LIMIT 1', (uid,))
+        if rest:
+            db.execute('UPDATE preference_sets SET is_default=1 WHERE id=%s', (rest['id'],))
+    return {'ok': True}
+
+
+# ================= 全局设置（与偏好无关） =================
+@app.get('/api/settings')
+async def get_settings(uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.08)
+    row = db.query_one('SELECT * FROM user_settings WHERE user_id=%s', (uid,))
+    return {'tradeNotify': bool(row['trade_notify']) if row else True}
+
+
+@app.post('/api/settings')
+async def save_settings(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    await asyncio.sleep(0.1)
+    p = payload or {}
+    db.execute(
+        'INSERT INTO user_settings (user_id, trade_notify) VALUES (%s,%s) '
+        'ON DUPLICATE KEY UPDATE trade_notify=VALUES(trade_notify)',
+        (uid, 1 if p.get('tradeNotify', True) else 0),
     )
     return {'ok': True}
 
 
 # ================= 智能体 =================
-REASON_TPL = [
-    '均线呈多头排列，MACD 金叉后红柱持续放大',
-    '北向资金连续 3 日净流入，主力资金关注度提升',
-    '最新季报营收同比增长 {g}%，基本面超预期',
-    '突破前期震荡平台上沿，量能配合放大',
-    'RSI 自超卖区回升，短线反弹动能积聚',
-    '机构评级上调至"买入"，目标价空间 {t}%',
-    '行业景气度上行，板块轮动资金持续流入',
-    '波动率收敛后选择向上突破，布林带开口扩张',
-]
+def _clamp_int(v, low, high, default):
+    """把模型给出的数值收敛到合法区间，非法值用默认值兜底。"""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, n))
 
-@app.post('/api/agent/recommend')
-async def agent_recommend(payload: dict = Body(default=None)):
-    await asyncio.sleep(1.4)
-    prefs = payload or {}
-    sectors = prefs.get('sectors') or []
-    m = get_market()
-    seed = 'rec-' + ','.join(sectors) + str(int(time.time()))
-    rnd = hash_seed(seed)
 
-    if not sectors:
-        pool = list(m['stocks'])
-    else:
-        pool = [
-            s for s in m['stocks']
-            if any(sec in s['sector'] or s['sector'] in sec for sec in sectors)
-        ]
-    picked = sorted(pool, key=lambda _: rnd() - 0.5)[:6]
-    result = []
-    for s in picked:
-        score = int(78 + rnd() * 19 + 0.5)
-        reasons = []
-        for _ in range(3):
-            tpl = REASON_TPL[int(rnd() * len(REASON_TPL))]
-            tpl = tpl.replace('{g}', str(12 + int(rnd() * 30 + 0.5)))
-            tpl = tpl.replace('{t}', str(15 + int(rnd() * 35 + 0.5)))
-            reasons.append(tpl)
-        result.append({
-            'code': s['code'], 'name': s['name'], 'sector': s['sector'],
-            'price': s['price'], 'change': (s['price'] - s['prevClose']) / s['prevClose'],
-            'score': score, 'confidence': int(62 + rnd() * 33 + 0.5),
-            'action': '建议买入' if rnd() > 0.25 else '建议关注',
-            'reasons': list(dict.fromkeys(reasons)),
-        })
-    result.sort(key=lambda x: -x['score'])
-    return result
+def _factor_line(s):
+    """把一只标的的真实行情与技术因子整理成一行文本，供模型分析。
+
+    因子全部由 Baostock 历史日 K 与实时快照推导，不引入任何模拟值。
+    """
+    closes = [c['close'] for c in (s.get('history') or [])]
+    price = s.get('price') or 0
+    prev = s.get('prevClose') or price
+    chg = (price - prev) / prev * 100 if prev else 0.0
+
+    def _ma(n):
+        return sum(closes[-n:]) / n if len(closes) >= n else None
+
+    def _chg(n):
+        return (closes[-1] / closes[-n - 1] - 1) * 100 if len(closes) > n else None
+
+    def _fmt(v, unit='', digits=2):
+        return '--' if v is None else f'{v:.{digits}f}{unit}'
+
+    vol20 = None
+    if len(closes) > 21:
+        rets = [closes[i] / closes[i - 1] - 1 for i in range(len(closes) - 20, len(closes))]
+        mean = sum(rets) / len(rets)
+        vol20 = (sum((r - mean) ** 2 for r in rets) / len(rets)) ** 0.5 * (252 ** 0.5) * 100
+
+    pos60 = None
+    if len(closes) >= 60:
+        hi, lo = max(closes[-60:]), min(closes[-60:])
+        pos60 = (closes[-1] - lo) / (hi - lo) * 100 if hi > lo else 50.0
+
+    return (
+        f'{s["code"]} {s["name"]}｜板块:{s["sector"]}｜现价:{_fmt(price)}｜今日:{chg:+.2f}%'
+        f'｜PE:{s.get("pe", "--")}｜MA5:{_fmt(_ma(5))}｜MA20:{_fmt(_ma(20))}｜MA60:{_fmt(_ma(60))}'
+        f'｜20日涨幅:{_fmt(_chg(20), "%")}｜60日位置:{_fmt(pos60, "%", 0)}｜20日年化波动:{_fmt(vol20, "%", 0)}'
+    )
+
 
 def _parse_strategy(text):
     """解析模型输出的策略 JSON，对常见畸形做容错。
@@ -478,6 +566,112 @@ def _parse_strategy(text):
     }
 
 
+def _parse_recommend(text, pool):
+    """解析模型输出的荐股 JSON，并用真实行情回填、过滤幻觉标的。
+
+    模型只负责 score / confidence / action / reasons，名称、板块、价格、涨跌幅
+    一律以服务端行情为准，避免模型编造价格或选出候选池之外的标的。
+    返回按评分降序的推荐列表；完全无法解析时返回 None。
+    """
+    try:
+        data = json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        data = None
+    picks = data.get('picks') if isinstance(data, dict) else None
+
+    if not isinstance(picks, list):
+        # 容错：标准解析失败时按字段正则提取（小模型常输出畸形 JSON）
+        codes = re.findall(r'"code"\s*:\s*"([^"]+)"', text)
+        if not codes:
+            return None
+        scores = re.findall(r'"score"\s*:\s*(\d+)', text)
+        confs = re.findall(r'"confidence"\s*:\s*(\d+)', text)
+        actions = re.findall(r'"action"\s*:\s*"([^"]*)"', text)
+        blocks = re.findall(r'"reasons"\s*:\s*\[(.*?)\]', text, re.S)
+        picks = [{
+            'code': code,
+            'score': scores[i] if i < len(scores) else None,
+            'confidence': confs[i] if i < len(confs) else None,
+            'action': actions[i] if i < len(actions) else None,
+            'reasons': re.findall(r'"((?:[^"\\]|\\.)*)"', blocks[i]) if i < len(blocks) else [],
+        } for i, code in enumerate(codes)]
+
+    by_code = {s['code']: s for s in pool}
+    result = []
+    for p in picks:
+        if not isinstance(p, dict):
+            continue
+        code = str(p.get('code') or '').strip()
+        s = by_code.get(code)
+        if not s:
+            continue  # 候选池之外的代码，视为模型幻觉直接丢弃
+        prev = s['prevClose']
+        reasons = [str(r).strip() for r in (p.get('reasons') or []) if str(r).strip()][:4]
+        result.append({
+            'code': code,
+            'name': s['name'],
+            'sector': s['sector'],
+            'price': s['price'],
+            'change': (s['price'] - prev) / prev if prev else 0.0,
+            'score': _clamp_int(p.get('score'), 0, 100, 75),
+            'confidence': _clamp_int(p.get('confidence'), 0, 100, 65),
+            'action': '建议买入' if p.get('action') == '建议买入' else '建议关注',
+            'reasons': reasons or ['模型未给出具体理由'],
+        })
+
+    if not result:
+        return None
+    result.sort(key=lambda x: -x['score'])
+    return result[:6]
+
+
+def _stream_tagged(messages, system_prompt, start_tag, end_tag, parse, event_name):
+    """流式读取模型输出，把标记包裹的 JSON 解析为结构化事件（SSE 生成器）。
+
+    标记之外的文本按增量下发；标记之内的内容不下发原文，只在解析成功后以
+    event_name 事件发出。解析失败则整块降级为普通文本，保证前端不丢信息。
+    """
+    def _sse(event_type, data):
+        return f'data: {json.dumps({"type": event_type, "data": data}, ensure_ascii=False)}\n\n'
+
+    pending = ''        # 待发文本缓冲，防止标记被 chunk 边界截断
+    in_block = False    # 是否处于标记包裹的 JSON 内部
+    buf = ''            # JSON 内容累积
+    tag_max_len = max(len(start_tag), len(end_tag))
+
+    for chunk in llm.chat_stream(messages, system_prompt=system_prompt):
+        if not in_block:
+            pending += chunk
+            if start_tag in pending:
+                # 标记之前的引导文字直接丢弃，不发给前端
+                pending = pending[pending.index(start_tag) + len(start_tag):]
+                in_block = True
+                buf = ''
+            elif len(pending) > tag_max_len:
+                emit, pending = pending[:-tag_max_len], pending[-tag_max_len:]
+                yield _sse('text', emit)
+        else:
+            buf += chunk
+            if end_tag in buf:
+                idx = buf.index(end_tag)
+                body = buf[:idx].strip().strip('"\'\n\t ')
+                pending = buf[idx + len(end_tag):].lstrip('"\n\t \r\'')
+                in_block = False
+                buf = ''
+                parsed = parse(body)
+                if parsed is None:
+                    yield _sse('text', start_tag + body + end_tag)
+                else:
+                    yield _sse(event_name, parsed)
+
+    if in_block:
+        # 没等到结束标记，整块当普通文本发出
+        yield _sse('text', start_tag + buf + pending)
+    elif pending:
+        yield _sse('text', pending)
+    yield _sse('done', {})
+
+
 @app.post('/api/agent/generate-strategy')
 async def agent_generate_strategy(payload: dict = Body(default=None)):
     """策略生成智能体（SSE 流式）。
@@ -487,84 +681,84 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
         或兼容旧格式：{ prompt: '...' }
 
     响应（SSE）：
-        event: data: {"type":"text","content":"..."}\n\n
-               data: {"type":"strategy","data":{...}}\n\n
-               data: {"type":"done"}\n\n
+        data: {"type":"text","data":"..."}\n\n
+        data: {"type":"strategy","data":{...}}\n\n
+        data: {"type":"done","data":{}}\n\n
     """
     p = payload or {}
     messages = p.get('messages')
     if not messages:
         # 兼容旧格式：单条 prompt
-        prompt = p.get('prompt') or ''
-        messages = [{'role': 'user', 'content': prompt}]
+        messages = [{'role': 'user', 'content': p.get('prompt') or ''}]
 
-    def _sse(event_type, data):
-        return f'data: {json.dumps({"type": event_type, "data": data}, ensure_ascii=False)}\n\n'
+    return StreamingResponse(
+        _stream_tagged(messages, llm.SYSTEM_PROMPT, llm.STRATEGY_START, llm.STRATEGY_END,
+                       _parse_strategy, 'strategy'),
+        media_type='text/event-stream',
+    )
 
-    def generate():
-        pending = ''            # 待发出的文本缓冲，防止标记被截断
-        in_strategy = False     # 是否正在策略 JSON 内部
-        strategy_buf = ''       # 策略 JSON 内容累积
-        start_tag = llm.STRATEGY_START
-        end_tag = llm.STRATEGY_END
-        tag_max_len = max(len(start_tag), len(end_tag))
 
-        for chunk in llm.chat_stream(messages):
-            if not in_strategy:
-                pending += chunk
-                # 检查是否遇到开始标记
-                while start_tag in pending:
-                    idx = pending.index(start_tag)
-                    # 策略前的引导文字直接丢弃，不发给前端
-                    pending = pending[idx + len(start_tag):]
-                    in_strategy = True
-                    strategy_buf = ''
-                    break
+def _load_prefs(uid, pref_id=None):
+    """按偏好 ID 读取偏好；未指定或不存在时用默认偏好，再无则退回内置默认值。"""
+    row = None
+    if pref_id:
+        row = db.query_one(
+            'SELECT * FROM preference_sets WHERE id=%s AND user_id=%s', (pref_id, uid))
+    if not row:
+        row = db.query_one(
+            'SELECT * FROM preference_sets WHERE user_id=%s ORDER BY is_default DESC, id LIMIT 1', (uid,))
+    return _row_to_prefset(row) if row else dict(DEFAULT_PREFS)
 
-                if not in_strategy:
-                    # 保留最后 tag_max_len 个字符在 pending 中，防止标记被截断
-                    if len(pending) > tag_max_len:
-                        emit = pending[:-tag_max_len]
-                        pending = pending[-tag_max_len:]
-                        # 策略前的引导文字已在检测到开始标记时丢弃
-                        # 这里发出的是：普通对话文本 或 策略后的补充说明
-                        yield _sse('text', emit)
-            else:
-                # 在策略 JSON 内部，累积到 strategy_buf
-                strategy_buf += chunk
-                # 检查是否遇到结束标记
-                while end_tag in strategy_buf:
-                    idx = strategy_buf.index(end_tag)
-                    json_str = strategy_buf[:idx].strip().strip('"\'\n\t ')
-                    # 剩余部分移到 pending，回到普通文本模式
-                    # 清理结束标记后的引号/空格/换行等噪音字符
-                    pending = strategy_buf[idx + len(end_tag):].lstrip('"\n\t \r\'')
-                    strategy_buf = ''
-                    in_strategy = False
-                    # 解析并发出策略事件（含畸形 JSON 容错）
-                    strategy = _parse_strategy(json_str)
-                    if strategy:
-                        yield _sse('strategy', strategy)
-                    else:
-                        # 无法恢复成策略，把整个策略块当普通文本发出
-                        yield _sse('text', start_tag + json_str + end_tag)
-                    break
 
-                if in_strategy:
-                    # 策略 JSON 内部不向客户端发文本（避免显示原始 JSON）
-                    pass
+@app.post('/api/agent/recommend')
+async def agent_recommend(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    """自动荐股智能体（SSE 流式）。
 
-        # ---- 流结束，清理剩余内容 ----
-        if in_strategy:
-            # 没遇到结束标记，把策略块整体当普通文本发出
-            yield _sse('text', start_tag + strategy_buf + pending)
-        else:
-            if pending:
-                yield _sse('text', pending)
+    先用真实行情快照构造候选池并推导技术因子，再交给大模型给出评分与理由。
+    模型只输出主观字段（score/confidence/action/reasons），名称、板块、价格、
+    涨跌幅等行情字段由后端按 code 回填，模型无法编造价格或池外标的。
 
-        yield _sse('done', {})
+    请求体：{ prefsId } —— 指定使用哪一套已保存偏好；缺省用默认偏好，
+            用户一套偏好都没有时退化为内置默认值（全市场候选池）。
 
-    return StreamingResponse(generate(), media_type='text/event-stream')
+    响应（SSE）：
+        data: {"type":"text","data":"..."}\n\n          分析说明（流式）
+        data: {"type":"recommend","data":[{...}]}\n\n  荐股结果（已回填真实行情）
+        data: {"type":"done","data":{}}\n\n
+    """
+    payload = payload or {}
+    prefs = _load_prefs(uid, payload.get('prefsId'))
+    sectors = prefs.get('sectors') or []
+    stocks = get_market()['stocks']
+
+    pool = [s for s in stocks
+            if any(sec in s['sector'] or s['sector'] in sec for sec in sectors)] if sectors else []
+    if not pool:
+        # 未设置关注板块，或所选板块无匹配标的时退化为全市场
+        pool = list(stocks)
+
+    table = '\n'.join(_factor_line(s) for s in pool)
+    user_msg = f'''请从下面的候选池中选出最值得关注的 3~6 只标的，给出评分与理由。
+
+## 我的投资偏好
+- 风险等级：{prefs.get('risk') or '未设置'}
+- 持仓周期：{prefs.get('horizon') or '未设置'}
+- 关注板块：{'、'.join(sectors) if sectors else '不限'}
+- 止损 / 止盈：{prefs.get('stopLoss', '--')}% / {prefs.get('takeProfit', '--')}%
+- 最大单票仓位：{prefs.get('maxPosition', '--')}%
+
+## 候选标的实时行情与技术因子（共 {len(pool)} 只）
+{table}
+
+请先输出一两句简短的分析说明，然后按约定格式输出荐股 JSON。'''
+
+    return StreamingResponse(
+        _stream_tagged([{'role': 'user', 'content': user_msg}], llm.RECOMMEND_SYSTEM_PROMPT,
+                       llm.RECOMMEND_START, llm.RECOMMEND_END,
+                       lambda body: _parse_recommend(body, pool), 'recommend'),
+        media_type='text/event-stream',
+    )
+
 
 # ================= 策略 / 回测 =================
 @app.get('/api/strategy/frameworks')

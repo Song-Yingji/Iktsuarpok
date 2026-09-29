@@ -46,7 +46,7 @@ async function submit() {
     <div class="auth-hero">
       <div class="auth-brand">
         <span class="logo-mark"><Icon name="bolt" :size="22" /></span>
-        <strong>QuantAI 智能量化投资平台</strong>
+        <strong>Iktsuarpok 智能量化投资平台</strong>
       </div>
       <h2>让 AI 为你<br /><span>量化每一次投资决策</span></h2>
       <p>融合实时行情、财经资讯、智能荐股与策略回测的一站式量化交易平台，从信号发现到自动下单全链路覆盖。</p>

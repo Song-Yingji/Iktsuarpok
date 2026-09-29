@@ -1,4 +1,4 @@
-# QuantAI 智能量化投资系统
+# Iktsuarpok 智能量化投资系统
 
 一个前后端分离的量化投资平台，内置真实行情引擎、策略回测、AI 智能体与账户资产管理，适合量化入门学习、策略研究与教学演示。行情与新闻接入真实免费源（历史 K 线用 Baostock 前复权、实时快照用 easyquotation、财经快讯用财联社电报），量化策略由大模型根据自然语言描述生成。
 
@@ -6,12 +6,13 @@
 
 - **真实行情引擎**：24 只 A 股 + 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
 - **AI 策略生成**：用自然语言描述投资想法，大模型流式返回对话内容与结构化策略，可一键保存到「我的量化策略」
-- **AI 智能荐股**：按投资偏好筛选标的，输出评分、置信度与理由，可一键加入自选股
+- **AI 智能荐股**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
 - **策略回测**：内置双均线、MACD、布林带、RSI、动量突破 5 种回测引擎，选择标的 / 区间 / 框架即可回测
 - **回测指标**：总收益、年化收益、最大回撤、夏普比率、CVaR、胜率、盈亏比等
 - **账户管理**：模拟盘 / 实盘账户独立管理，支持新增、解绑、绑定已保存策略与自动交易开关
 - **财经资讯**：财联社 7×24 小时快讯，分类浏览、关键词检索、情绪标签
-- **投资偏好**：风险等级、持仓周期、行业板块、止损止盈与交易提醒设置
+- **投资偏好**：可保存多套偏好并自定义名称，设为默认供荐股使用；列表式管理，新增 / 编辑通过弹窗完成
+- **全局设置**：交易提醒等与偏好无关的开关独立保存，位于账户页
 
 ## 技术栈
 
@@ -48,6 +49,7 @@ myProject/
 │   ├── index.html
 │   └── package.json
 ├── database_schema.sql           # 数据库建库建表脚本
+├── migration_preference_sets.sql # 老库升级脚本（单套偏好 → 多套偏好）
 ├── 一键启动量化系统.bat          # 一键启动前后端（Windows）
 └── 停止量化系统.bat              # 停止前后端服务
 ```
@@ -69,6 +71,14 @@ mysql -u root -p --default-character-set=utf8mb4 < database_schema.sql
 ```
 
 然后在 `quant-invest-server-py/db_config.py` 中填写连接信息（默认 `127.0.0.1:3306`，用户 `root`）。
+
+> 若你的数据库是**旧版本**（已有 `user_preferences` 表、且偏好只有一套），不要重新执行 `database_schema.sql`，改为执行一次升级脚本即可把旧偏好迁成多套偏好结构：
+>
+> ```bash
+> mysql -u root -p --default-character-set=utf8mb4 < migration_preference_sets.sql
+> ```
+>
+> 该脚本会把 `user_preferences` 改名为 `preference_sets`、补齐 `name` / `is_default` 字段，并把交易提醒迁到新的 `user_settings` 表，已有偏好数据不会丢失。
 
 ### 2. 配置大模型
 
@@ -113,8 +123,8 @@ npm run dev
 - 财经资讯：分类浏览与关键词搜索
 - AI 智能体：智能荐股、策略生成（流式对话）
 - 量化策略：已保存的智能体策略列表、删除、选择回测标的 / 区间 / 框架并查看回测结果
-- 账户管理：账户列表、新增 / 解绑账户、绑定已保存策略、自动交易开关
-- 投资偏好：风险偏好、持仓约束与交易提醒
+- 账户管理：账户列表、新增 / 解绑账户、绑定已保存策略、自动交易开关，以及全局设置（交易提醒）
+- 投资偏好：多套偏好的列表管理，新增 / 编辑通过弹窗完成，可设为默认供荐股使用
 
 ## 系统流程
 
@@ -205,14 +215,43 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[AI 智能体页 · 智能荐股] --> B[读取投资偏好 + 已有自选]
-    B --> C[POST /api/agent/recommend]
-    C --> D[展示荐股列表<br/>评分 / 置信度 / 理由]
-    D --> E{加入自选?}
-    E -- 是 --> F[POST /api/watchlist 入库]
-    F --> G[自选股页展示<br/>按钮变为「已加入自选」]
-    E -- 否 --> Z[结束]
+    A[AI 智能体页 · 智能荐股] --> B[下拉选择偏好集<br/>默认选中「默认偏好」]
+    B --> C[POST /api/agent/recommend<br/>body: prefsId]
+    C --> D[后端按 prefsId 取偏好<br/>按关注板块构造候选池<br/>推导均线 / 涨幅 / 波动率等真实因子]
+    D --> E[调用大模型流式分析]
+    E --> F[SSE 推送分析说明<br/>type=text]
+    F --> G[SSE 推送荐股结果<br/>type=recommend · 后端回填真实行情]
+    G --> H[展示荐股列表<br/>评分 / 置信度 / 理由]
+    H --> I{加入自选?}
+    I -- 是 --> J[POST /api/watchlist 入库]
+    J --> K[自选股页展示<br/>按钮变为「已加入自选」]
+    I -- 否 --> Z[结束]
 ```
+
+> 候选池之外的代码（模型幻觉）在解析阶段即被丢弃；名称、板块、价格、涨跌幅均由后端按 code 回填真实行情，模型无法编造数据。
+> `prefsId` 缺省或该偏好已被删除时，后端回落到默认偏好；用户一套偏好都没有时使用内置默认值（全市场候选池）。
+
+### 4.1 投资偏好：多套偏好管理
+
+```mermaid
+flowchart TD
+    A[偏好页] --> B[GET /api/prefs<br/>列表：默认偏好排在最前]
+    B --> C{操作}
+    C -- 添加偏好 --> D[弹出偏好表单<br/>名称 + 风险 / 期限 / 板块 / 风控]
+    D --> E{点击保存?}
+    E -- 是 --> F[POST /api/prefs 落库]
+    E -- 否 / 关闭弹窗 --> G[丢弃，不落库]
+    C -- 编辑 --> H[PUT /api/prefs/id]
+    C -- 设为默认 --> I[POST /api/prefs/id/default<br/>同用户只保留一个默认]
+    C -- 删除 --> J[DELETE /api/prefs/id<br/>若删的是默认则自动提一套为默认]
+    F --> B
+    H --> B
+    I --> B
+    J --> B
+```
+
+> 偏好名称在同一用户下唯一；用户保存的第一套偏好自动成为默认偏好。
+> 交易提醒等开关与偏好无关，单独存在 `user_settings`，在账户页的「全局设置」中配置。
 
 ### 5. AI 智能体：策略生成流式流程
 
@@ -309,8 +348,13 @@ flowchart TD
 | GET | `/api/market/snapshot` | 行情快照（含全部标的与历史 K 线） |
 | GET | `/api/news` | 新闻列表（财联社实时快讯，支持分类 / 关键字） |
 | GET | `/api/news/categories` | 新闻分类 |
-| GET/POST | `/api/prefs` | 获取 / 保存投资偏好 |
-| POST | `/api/agent/recommend` | 智能荐股 |
+| GET | `/api/prefs` | 偏好列表（多套，默认偏好排在最前） |
+| POST | `/api/prefs` | 新增一套偏好（首套自动设为默认） |
+| PUT | `/api/prefs/{id}` | 编辑偏好 |
+| POST | `/api/prefs/{id}/default` | 设为荐股默认偏好 |
+| DELETE | `/api/prefs/{id}` | 删除偏好（删默认时自动补选一套） |
+| GET/POST | `/api/settings` | 全局设置（交易提醒，与偏好无关） |
+| POST | `/api/agent/recommend` | 智能荐股（SSE 流式，body 传 `prefsId`） |
 | POST | `/api/agent/generate-strategy` | 策略生成智能体（SSE 流式） |
 | GET | `/api/strategy/frameworks` | 回测框架列表 |
 | POST | `/api/strategy/backtest` | 执行回测 |
@@ -334,6 +378,20 @@ data: {"type":"done","data":{}}
 ```
 
 后端用 `===STRATEGY_JSON===` / `===END_STRATEGY===` 标记切分闲聊文本与策略 JSON；策略块不会以原始文本下发，解析成功才推送 `strategy` 事件。解析采用「标准 JSON（`strict=False`，容忍字符串内换行）→ 字段正则兜底」两级策略，兼容小模型输出的畸形 JSON。
+
+### 智能荐股接口的流式协议
+
+`POST /api/agent/recommend` 请求体为 `{ prefsId }` —— 指定使用哪一套已保存偏好；`prefsId` 缺省、或该偏好已被删除时，后端回落到默认偏好，用户一套偏好都没有时使用内置默认值。响应同为 `text/event-stream`：
+
+```
+data: {"type":"text","data":"增量分析说明"}
+data: {"type":"recommend","data":[{ "code": ..., "name": ..., "price": ..., "change": ..., "score": ..., "confidence": ..., "action": ..., "reasons": [...] }]}
+data: {"type":"done","data":{}}
+```
+
+与策略接口不同，荐股流程在调用模型前先用真实行情快照构造候选池（按偏好板块筛选，无匹配时退化为全市场）并推导技术因子（均线、区间位置、涨幅、年化波动率等），把因子表交给模型分析。模型只输出主观字段（`score` / `confidence` / `action` / `reasons`），名称、板块、价格、涨跌幅一律由后端按 `code` 回填真实行情，候选池之外的代码视为幻觉直接丢弃，因此模型无法编造价格或池外标的。JSON 用 `===RECOMMEND_JSON===` / `===END_RECOMMEND===` 包裹，解析失败时整块降级为普通文本下发。
+
+> 偏好只在服务端按 `prefsId` 读取并校验归属（`user_id` 隔离），前端无法通过伪造请求体越权使用他人偏好。
 
 ## 依赖清单
 

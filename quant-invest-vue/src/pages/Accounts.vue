@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { accountApi, strategyApi } from '../api'
+import { accountApi, strategyApi, settingsApi } from '../api'
 import { fmt } from '../lib/utils'
 import { Card, StatCard, Button, Badge, Toggle, Modal, Field } from '../components/ui'
 import Icon from '../components/Icon.vue'
@@ -19,6 +19,9 @@ const strategies = ref([])
 const loading = ref(false)
 const savingId = ref(null)
 
+// 全局设置：与投资偏好无关，独立于偏好保存
+const settings = ref({ tradeNotify: true })
+
 const showCreate = ref(false)
 const creating = ref(false)
 const form = ref({ broker: '', type: '模拟盘', capital: 100000, accountNo: '' })
@@ -32,6 +35,24 @@ async function load() {
   accounts.value = accs
   strategies.value = savedStrategies
   loading.value = false
+}
+
+async function loadSettings() {
+  try {
+    settings.value = await settingsApi.get()
+  } catch (e) {
+    // 拉取失败保持默认值，不阻断账户页其余内容
+  }
+}
+
+async function onTradeNotify(checked) {
+  try {
+    await settingsApi.save({ tradeNotify: checked })
+    settings.value = { ...settings.value, tradeNotify: checked }
+    toast('全局设置已保存')
+  } catch (e) {
+    toast(e.message, 'error')
+  }
 }
 
 async function patch(acc, changes) {
@@ -83,7 +104,10 @@ async function createAccount() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadSettings()
+})
 </script>
 
 <template>
@@ -104,6 +128,17 @@ onMounted(load)
       <StatCard icon="account" label="总资产" :value="fmt.money(totalAssets)" sub="全部账户资产合计" />
       <StatCard icon="bolt" label="自动交易" :value="autoCount" :sub="`${accounts.length} 个账户中已开启`" :tone="autoCount > 0 ? 'up' : ''" />
     </div>
+
+    <!-- 全局设置：与投资偏好无关，单独保存 -->
+    <Card class="mt-16" title="全局设置">
+      <div class="account-row">
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <span>交易提醒</span>
+          <small style="color:var(--text-3);font-size:11.5px">产生交易信号或成交时推送通知，与投资偏好无关</small>
+        </div>
+        <Toggle :checked="settings.tradeNotify" @change="onTradeNotify" />
+      </div>
+    </Card>
 
     <!-- 账户卡列表 -->
     <div v-if="loading" style="text-align:center;padding:40px;color:var(--text-3)">账户加载中…</div>

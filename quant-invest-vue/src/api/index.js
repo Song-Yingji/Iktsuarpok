@@ -55,84 +55,123 @@ export const newsApi = {
   categories: () => request('/news/categories')
 }
 
-// ---------------- 投资偏好 ----------------
+// ---------------- 投资偏好（多套） ----------------
 export const prefsApi = {
-  get: () => request('/prefs'),
-  save: (prefs) => request('/prefs', { method: 'POST', body: prefs })
+  list: () => request('/prefs'),
+  create: (payload) => request('/prefs', { method: 'POST', body: payload }),
+  update: (id, payload) => request('/prefs/' + id, { method: 'PUT', body: payload }),
+  remove: (id) => request('/prefs/' + id, { method: 'DELETE' }),
+  setDefault: (id) => request('/prefs/' + id + '/default', { method: 'POST' })
+}
+
+// ---------------- 全局设置（与偏好无关） ----------------
+export const settingsApi = {
+  get: () => request('/settings'),
+  save: (payload) => request('/settings', { method: 'POST', body: payload })
 }
 
 // ---------------- 智能体 ----------------
-export const agentApi = {
-  recommend: (prefs) => request('/agent/recommend', { method: 'POST', body: prefs }),
+/**
+ * 打开一个 SSE 流并按事件分发（策略生成、智能荐股共用）
+ * @param {string} path - 相对 BASE_URL 的接口路径
+ * @param {Object} body - 请求体
+ * @param {Object} handlers - { onEvent(evt), onError(err) }
+ * @returns {Function} 取消函数
+ */
+function openStream(path, body, { onEvent, onError } = {}) {
+  const token = localStorage.getItem('quant_token')
+  const controller = new AbortController()
 
+  fetch(BASE_URL + path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {})
+    },
+    body: JSON.stringify(body),
+    signal: controller.signal
+  }).then(async (res) => {
+    if (!res.ok) {
+      if (res.status === 401) {
+        localStorage.removeItem('quant_token')
+        localStorage.removeItem('quant_user')
+        location.href = '/login'
+      }
+      throw new Error(`请求失败 (${res.status})`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE 以 \n\n 分隔事件
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        if (!raw.startsWith('data: ')) continue
+        const jsonStr = raw.slice(6)
+        if (!jsonStr.trim()) continue
+        try {
+          onEvent?.(JSON.parse(jsonStr))
+        } catch (e) {
+          // 忽略解析失败的行
+        }
+      }
+    }
+  }).catch((e) => {
+    if (e.name === 'AbortError') return
+    onError?.(e)
+  })
+
+  return () => controller.abort()
+}
+
+export const agentApi = {
   /**
-   * 流式对话（SSE），用于策略生成智能体
+   * 策略生成智能体（SSE 流式对话）
    * @param {Array} messages - 对话历史 [{role: 'user'|'assistant', content: '...'}, ...]
-   * @param {Object} handlers - 事件回调
-   * @param {Function} handlers.onText - 文本增量回调 (text) => void
-   * @param {Function} handlers.onStrategy - 策略生成回调 (strategy) => void
-   * @param {Function} handlers.onDone - 结束回调 () => void
-   * @param {Function} handlers.onError - 错误回调 (err) => void
+   * @param {Object} h - 事件回调
+   * @param {Function} h.onText - 文本增量 (text) => void
+   * @param {Function} h.onStrategy - 策略生成 (strategy) => void
+   * @param {Function} h.onDone - 结束 () => void
+   * @param {Function} h.onError - 错误 (err) => void
    * @returns {Function} 取消函数
    */
-  chatStream(messages, handlers = {}) {
-    const token = localStorage.getItem('quant_token')
-    const controller = new AbortController()
-
-    fetch(BASE_URL + '/agent/generate-strategy', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: 'Bearer ' + token } : {})
+  chatStream(messages, h = {}) {
+    return openStream('/agent/generate-strategy', { messages }, {
+      onEvent(evt) {
+        if (evt.type === 'text') h.onText?.(evt.data)
+        else if (evt.type === 'strategy') h.onStrategy?.(evt.data)
+        else if (evt.type === 'done') h.onDone?.()
       },
-      body: JSON.stringify({ messages }),
-      signal: controller.signal
-    }).then(async (res) => {
-      if (!res.ok) {
-        if (res.status === 401) {
-          localStorage.removeItem('quant_token')
-          localStorage.removeItem('quant_user')
-          location.href = '/login'
-        }
-        throw new Error(`请求失败 (${res.status})`)
-      }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder('utf-8')
-      let buffer = ''
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        // SSE 以 \n\n 分隔事件
-        let idx
-        while ((idx = buffer.indexOf('\n\n')) !== -1) {
-          const raw = buffer.slice(0, idx)
-          buffer = buffer.slice(idx + 2)
-          if (!raw.startsWith('data: ')) continue
-          const jsonStr = raw.slice(6)
-          if (!jsonStr.trim()) continue
-          try {
-            const evt = JSON.parse(jsonStr)
-            if (evt.type === 'text') {
-              handlers.onText?.(evt.data)
-            } else if (evt.type === 'strategy') {
-              handlers.onStrategy?.(evt.data)
-            } else if (evt.type === 'done') {
-              handlers.onDone?.()
-            }
-          } catch (e) {
-            // 忽略解析失败的行
-          }
-        }
-      }
-    }).catch((e) => {
-      if (e.name === 'AbortError') return
-      handlers.onError?.(e)
+      onError: (e) => h.onError?.(e)
     })
+  },
 
-    return () => controller.abort()
+  /**
+   * 自动荐股智能体（SSE 流式分析）
+   * @param {number|null} prefsId - 使用的偏好集 id，缺省后端用默认偏好
+   * @param {Object} h - 事件回调
+   * @param {Function} h.onText - 分析说明增量 (text) => void
+   * @param {Function} h.onRecommend - 荐股结果 (list) => void
+   * @param {Function} h.onDone - 结束 () => void
+   * @param {Function} h.onError - 错误 (err) => void
+   * @returns {Function} 取消函数
+   */
+  recommendStream(prefsId, h = {}) {
+    return openStream('/agent/recommend', { prefsId: prefsId || null }, {
+      onEvent(evt) {
+        if (evt.type === 'text') h.onText?.(evt.data)
+        else if (evt.type === 'recommend') h.onRecommend?.(evt.data)
+        else if (evt.type === 'done') h.onDone?.()
+      },
+      onError: (e) => h.onError?.(e)
+    })
   }
 }
 

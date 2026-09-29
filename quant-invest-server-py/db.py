@@ -64,3 +64,25 @@ def insert(sql, args=None):
         raise
     finally:
         conn.close()
+
+
+def execute_tx(statements):
+    """在单个事务内按顺序执行多条写语句，返回最后一条 INSERT 的自增主键。
+
+    statements: [(sql, args), ...]，用于「先改后插」这类需要原子性的场景
+    （如切换默认偏好：先清掉旧的默认标记，再写入新的）。
+    """
+    conn = get_conn()
+    try:
+        last_id = None
+        with conn.cursor() as cur:
+            for sql, args in statements:
+                cur.execute(sql, args or ())
+                last_id = cur.lastrowid
+        conn.commit()
+        return last_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

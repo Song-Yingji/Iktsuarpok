@@ -27,14 +27,14 @@ onMounted(scrollDown)
 </script>
 
 <template>
-  <Card class="mt-16">
+  <Card>
     <template #title>
       <span style="display: flex; align-items: center; gap: 9px">
         <span class="agent-avatar" style="width: 34px; height: 34px; border-radius: 9px">
           <Icon name="robot" :size="17" />
         </span>
         量化策略生成智能体
-        <Badge tone="purple">QuantCopilot · 流式</Badge>
+        <Badge tone="purple">Quant Buffett</Badge>
       </span>
     </template>
 
@@ -43,21 +43,24 @@ onMounted(scrollDown)
         <div v-for="(msg, i) in messages" :key="i" :class="['msg', msg.role]">
           <div class="msg-avatar">{{ msg.role === 'bot' ? 'AI' : '我' }}</div>
           <div class="msg-bubble">
-            <!-- 文本内容 -->
             <div v-if="msg.text" style="white-space: pre-wrap">{{ msg.text }}<span v-if="msg.typing" class="cursor-blink">▍</span></div>
 
-            <!-- 策略卡片 -->
             <div v-if="msg.strategy" class="strategy-card">
-              <div style="font-weight: 700; margin-bottom: 8px">
-                已生成策略：{{ msg.strategy.name }}
-                <Badge tone="purple" style="margin-left: 8px">{{ msg.strategy.type }}</Badge>
+              <div class="strat-card-head">
+                <div class="strat-card-title">
+                  <Icon name="strategy" :size="16" />
+                  <span>{{ msg.strategy.name }}</span>
+                </div>
+                <Badge tone="purple">{{ msg.strategy.type }}</Badge>
               </div>
-              <div style="font-size: 12.5px; color: var(--text-2)">交易规则：</div>
-              <ul class="rule-list">
-                <li v-for="(r, j) in msg.strategy.rules" :key="j">{{ r }}</li>
-              </ul>
+              <div class="strat-card-rules">
+                <span class="strat-rules-label">交易规则</span>
+                <ul class="rule-list">
+                  <li v-for="(r, j) in msg.strategy.rules" :key="j">{{ r }}</li>
+                </ul>
+              </div>
               <pre>{{ msg.strategy.code }}</pre>
-              <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+              <div class="strat-card-actions">
                 <Button v-if="!msg.saved" size="sm" icon="check" @click="saveStrategy(msg)">保存到我的量化策略</Button>
                 <Badge v-else tone="up">已保存</Badge>
                 <Button size="sm" icon="strategy" @click="router.push('/strategy')">前往回测验证</Button>
@@ -68,7 +71,8 @@ onMounted(scrollDown)
       </div>
 
       <div class="quick-chips">
-        <Chip v-for="p in QUICK_PROMPTS" :key="p" @click="send(p)">{{ p }}</Chip>
+        <span class="quick-label">快速提问</span>
+        <Chip v-for="p in QUICK_PROMPTS" :key="p" @click="send(p)" class="quick-chip">{{ p }}</Chip>
       </div>
       <div class="chat-input">
         <input
@@ -98,9 +102,49 @@ onMounted(scrollDown)
 }
 .strategy-card {
   margin-top: 12px;
-  padding: 12px 14px;
-  background: rgba(124, 58, 237, 0.08);
-  border: 1px solid rgba(124, 58, 237, 0.25);
-  border-radius: 10px;
+  padding: 14px;
+  background: rgba(124, 58, 237, 0.06);
+  border: 1px solid rgba(124, 58, 237, 0.22);
+  border-radius: 12px;
+}
+.strat-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.strat-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--purple);
+}
+.strat-card-rules { margin-bottom: 8px; }
+.strat-rules-label {
+  font-size: 12px;
+  color: var(--text-3);
+  display: block;
+  margin-bottom: 4px;
+}
+.strat-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.quick-label {
+  font-size: 12px;
+  color: var(--text-3);
+  align-self: center;
+  margin-right: 2px;
+}
+.quick-chip::before {
+  content: '›';
+  color: var(--accent-2);
+  font-weight: 700;
+  margin-right: 4px;
 }
 </style>
