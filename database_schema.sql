@@ -42,22 +42,6 @@ CREATE TABLE users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='用户表';
 
--- 已建库升级（新库执行上面建表后无需执行；老库按自身情况二选一执行）：
---
--- 【场景 A】老库还没有任何权限字段，直接加 role：
--- ALTER TABLE users
---   ADD COLUMN role TINYINT UNSIGNED NOT NULL DEFAULT 0
---     COMMENT '权限等级：0普通用户 1管理员 2超级管理员' AFTER avatar;
---
--- 【场景 B】老库已有 is_admin / is_super（本仓库早期版本），先加 role 回填再删旧字段：
--- ALTER TABLE users
---   ADD COLUMN role TINYINT UNSIGNED NOT NULL DEFAULT 0
---     COMMENT '权限等级：0普通用户 1管理员 2超级管理员' AFTER avatar;
--- UPDATE users SET role = CASE WHEN is_super = 1 THEN 2 WHEN is_admin = 1 THEN 1 ELSE 0 END;
--- ALTER TABLE users DROP COLUMN is_admin, DROP COLUMN is_super;
---
--- 超级管理员账号由后端首次启动时按 admin_config.py 自动播种（role=2），无需手工插入。
-
 -- ------------------------------------------------------------
 -- 2. 投资偏好表（1 用户 : N 套）
 -- 对应 data.py 的 DEFAULT_PREFS、/api/prefs
