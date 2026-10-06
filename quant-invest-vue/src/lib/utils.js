@@ -19,6 +19,12 @@ export const fmt = {
     if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿'
     if (n >= 1e4) return (n / 1e4).toFixed(1) + '万'
     return n.toFixed(0)
+  },
+  size: (n) => {
+    if (n == null) return '--'
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
+    if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
+    return n + ' B'
   }
 }
 

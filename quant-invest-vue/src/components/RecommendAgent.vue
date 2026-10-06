@@ -216,11 +216,15 @@ function dashOffset(score) { return C * (1 - score / 100) }
 .rec-empty-text p { color: var(--text-3); font-size: 13px; max-width: 380px; line-height: 1.6; }
 
 .rec-card {
+  display: flex;
+  flex-direction: column;
   border-radius: 12px;
   padding: 16px;
   background: linear-gradient(165deg, var(--bg-2), #0c1322);
   transition: all 0.2s;
 }
+/* 理由条数不一致时，由理由区吸收剩余高度，保证底部评分行三张卡片对齐 */
+.rec-reasons { flex: 1; }
 .rec-card:hover {
   border-color: var(--accent);
   transform: translateY(-2px);

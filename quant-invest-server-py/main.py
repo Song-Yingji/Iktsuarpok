@@ -5,7 +5,9 @@
 运行：python main.py  （默认端口 3000）
 """
 import asyncio
+import hmac
 import json
+import os
 import re
 import threading
 import time
@@ -13,15 +15,17 @@ import math
 from contextlib import asynccontextmanager
 
 import pymysql
-from fastapi import FastAPI, Body, Depends, Header, HTTPException
+from fastapi import FastAPI, Body, Depends, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import uvicorn
 
+import admin_config
 import auth
 import db
 import llm
+import rag
 from data import (
     get_market, tick_market, get_news, news_error, refresh_news, get_news_categories,
     BACKTEST_FRAMEWORKS,
@@ -32,9 +36,29 @@ PORT = 3000
 LATENCY = 0.2  # 模拟网络延迟（秒）
 
 
+def ensure_super_admin():
+    """确保库中存在唯一的超级管理员（role=2，首次启动按 admin_config.py 播种）。"""
+    try:
+        if db.query_one('SELECT id FROM users WHERE role=2 LIMIT 1'):
+            return
+        name = admin_config.ADMIN_USERNAME
+        row = db.query_one('SELECT id FROM users WHERE username=%s', (name,))
+        if row:
+            db.execute('UPDATE users SET role=2 WHERE id=%s', (row['id'],))
+        else:
+            db.insert(
+                'INSERT INTO users (username, password_hash, phone, avatar, role)'
+                ' VALUES (%s,%s,%s,%s,2)',
+                (name, auth.hash_password(admin_config.ADMIN_PASSWORD), None, name[:1].upper()),
+            )
+    except Exception as e:
+        print(f'[warn] 超级管理员初始化失败：{e}')
+
+
 @asynccontextmanager
 async def lifespan(app):
     # 启动行情引擎：初始化 + 每 2 秒推进一个 tick（真实服务端随机游走）
+    ensure_super_admin()
     get_market()
 
     def loop():
@@ -89,6 +113,27 @@ def get_current_user(authorization: str = Header(default=None)) -> int:
     if not uid:
         raise HTTPException(status_code=401, detail='未登录或登录已过期')
     return uid
+
+
+def get_current_admin(authorization: str = Header(default=None)) -> dict:
+    """从 Authorization: Bearer <token> 解析后台管理员。
+
+    每次请求都回库复核，确保账号未被删除、且管理员身份未被取消。
+    """
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='管理员未登录或登录已过期')
+    uid = auth.parse_admin_token(authorization[7:])
+    if not uid:
+        raise HTTPException(status_code=401, detail='管理员未登录或登录已过期')
+    row = db.query_one('SELECT id, username, role FROM users WHERE id=%s', (uid,))
+    if not row or row['role'] < 1:
+        raise HTTPException(status_code=401, detail='管理员权限已变更，请重新登录')
+    return row
+
+
+def sse(event_type, data):
+    """把一条事件序列化成 SSE 帧。"""
+    return f'data: {json.dumps({"type": event_type, "data": data}, ensure_ascii=False)}\n\n'
 
 
 # ================= 技术指标 =================
@@ -631,9 +676,6 @@ def _stream_tagged(messages, system_prompt, start_tag, end_tag, parse, event_nam
     标记之外的文本按增量下发；标记之内的内容不下发原文，只在解析成功后以
     event_name 事件发出。解析失败则整块降级为普通文本，保证前端不丢信息。
     """
-    def _sse(event_type, data):
-        return f'data: {json.dumps({"type": event_type, "data": data}, ensure_ascii=False)}\n\n'
-
     pending = ''        # 待发文本缓冲，防止标记被 chunk 边界截断
     in_block = False    # 是否处于标记包裹的 JSON 内部
     buf = ''            # JSON 内容累积
@@ -649,7 +691,7 @@ def _stream_tagged(messages, system_prompt, start_tag, end_tag, parse, event_nam
                 buf = ''
             elif len(pending) > tag_max_len:
                 emit, pending = pending[:-tag_max_len], pending[-tag_max_len:]
-                yield _sse('text', emit)
+                yield sse('text', emit)
         else:
             buf += chunk
             if end_tag in buf:
@@ -660,27 +702,57 @@ def _stream_tagged(messages, system_prompt, start_tag, end_tag, parse, event_nam
                 buf = ''
                 parsed = parse(body)
                 if parsed is None:
-                    yield _sse('text', start_tag + body + end_tag)
+                    yield sse('text', start_tag + body + end_tag)
                 else:
-                    yield _sse(event_name, parsed)
+                    yield sse(event_name, parsed)
 
     if in_block:
         # 没等到结束标记，整块当普通文本发出
-        yield _sse('text', start_tag + buf + pending)
+        yield sse('text', start_tag + buf + pending)
     elif pending:
-        yield _sse('text', pending)
-    yield _sse('done', {})
+        yield sse('text', pending)
+    yield sse('done', {})
+
+
+RAG_TOP_K = 4  # 策略生成时从知识库召回的片段数
+
+
+def _rag_context(query):
+    """检索本地知识库，返回（拼接好的参考资料文本, 命中片段列表）。
+
+    知识库为空、未配置向量模型或检索失败时返回空串，静默降级为普通对话，
+    保证 RAG 不可用不影响策略生成主流程。
+    """
+    if not (query or '').strip():
+        return '', []
+    try:
+        hits = rag.retrieve(query, top_k=RAG_TOP_K)
+    except rag.RagError:
+        return '', []
+    if not hits:
+        return '', []
+
+    blocks = [
+        f'[{i + 1}] 来源《{h["docName"]}》（相似度 {h["score"]:.2f}）\n{h["text"]}'
+        for i, h in enumerate(hits)
+    ]
+    return '## 参考资料（来自本地知识库，请优先依据以下内容回答）\n' + '\n\n'.join(blocks), hits
 
 
 @app.post('/api/agent/generate-strategy')
 async def agent_generate_strategy(payload: dict = Body(default=None)):
-    """策略生成智能体（SSE 流式）。
+    """策略生成智能体（SSE 流式，带 RAG 检索增强）。
 
     请求体：
         messages: [{role: 'user'|'assistant', content: '...'}, ...]  多轮对话
         或兼容旧格式：{ prompt: '...' }
 
+    检索增强：把用户最新提问向量化，在本地知识库中做相似度检索，命中片段与
+    原始问题拼成新的用户消息，再和 llm.SYSTEM_PROMPT 一起交给大模型。
+    知识库为空或不可用时静默降级为普通对话，不影响原有功能。
+
     响应（SSE）：
+        data: {"type":"rag","data":{"count":N,"sources":[...]}}\n\n  本轮命中的知识库来源
         data: {"type":"text","data":"..."}\n\n
         data: {"type":"strategy","data":{...}}\n\n
         data: {"type":"done","data":{}}\n\n
@@ -691,11 +763,22 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
         # 兼容旧格式：单条 prompt
         messages = [{'role': 'user', 'content': p.get('prompt') or ''}]
 
-    return StreamingResponse(
-        _stream_tagged(messages, llm.SYSTEM_PROMPT, llm.STRATEGY_START, llm.STRATEGY_END,
-                       _parse_strategy, 'strategy'),
-        media_type='text/event-stream',
-    )
+    def gen():
+        msgs = [dict(m) for m in messages]
+        hits = []
+        if msgs and msgs[-1].get('role') == 'user':
+            context, hits = _rag_context(msgs[-1].get('content') or '')
+            if context:
+                msgs[-1]['content'] = f'{context}\n\n## 我的问题\n{msgs[-1]["content"]}'
+
+        yield sse('rag', {
+            'count': len(hits),
+            'sources': [{'docName': h['docName'], 'score': round(h['score'], 3)} for h in hits],
+        })
+        yield from _stream_tagged(msgs, llm.SYSTEM_PROMPT, llm.STRATEGY_START, llm.STRATEGY_END,
+                                  _parse_strategy, 'strategy')
+
+    return StreamingResponse(gen(), media_type='text/event-stream')
 
 
 def _load_prefs(uid, pref_id=None):
@@ -758,6 +841,232 @@ async def agent_recommend(payload: dict = Body(default=None), uid: int = Depends
                        lambda body: _parse_recommend(body, pool), 'recommend'),
         media_type='text/event-stream',
     )
+
+
+# ================= 后台管理（知识库） =================
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 单文件上限 10MB
+
+
+@app.post('/api/admin/login')
+async def admin_login(payload: dict = Body(default=None)):
+    """后台管理员登录：查库校验账号密码，且要求 role >= 1。"""
+    await asyncio.sleep(LATENCY)
+    p = payload or {}
+    username = (p.get('username') or '').strip()
+    password = p.get('password') or ''
+    if not username or not password:
+        return fail(400, '请输入账号和密码')
+    row = db.query_one(
+        'SELECT id, username, password_hash, role FROM users WHERE username=%s',
+        (username,),
+    )
+    if not row or not auth.verify_password(password, row['password_hash']):
+        return fail(401, '账号或密码错误')
+    if row['role'] < 1:
+        return fail(403, '该账号没有后台管理权限')
+    return {
+        'token': auth.make_admin_token(row['id']),
+        'admin': {'id': row['id'], 'username': row['username'], 'role': row['role']},
+    }
+
+
+@app.get('/api/admin/kb/stats')
+async def admin_kb_stats(_: str = Depends(get_current_admin)):
+    """知识库概况：文档数、分块数、向量模型、存储位置等。"""
+    await asyncio.sleep(0.05)
+    try:
+        return rag.stats()
+    except rag.RagError as e:
+        return fail(500, str(e))
+
+
+@app.get('/api/admin/docs')
+async def admin_list_docs(_: str = Depends(get_current_admin)):
+    """已入库文档列表。"""
+    await asyncio.sleep(0.05)
+    try:
+        return rag.list_docs()
+    except rag.RagError as e:
+        return fail(500, str(e))
+
+
+@app.post('/api/admin/docs')
+async def admin_upload_doc(file: UploadFile = File(...), _: str = Depends(get_current_admin)):
+    """上传文档：解析文本 → 递归分块 → 向量化 → 写入本地 Chroma 库。
+
+    同名文档会覆盖旧索引。响应体为入库后的文档信息。
+    """
+    raw = await file.read()
+    if not raw:
+        return fail(400, '文件内容为空')
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return fail(400, '文件过大，请上传 10MB 以内的文档')
+
+    filename = os.path.basename(file.filename or '未命名文档')
+    try:
+        text = rag.extract_text(filename, raw)
+        doc = rag.add_document(filename, text)
+    except rag.RagError as e:
+        return fail(400, str(e))
+    return doc
+
+
+@app.delete('/api/admin/docs/{doc_id}')
+async def admin_delete_doc(doc_id: str, _: str = Depends(get_current_admin)):
+    """按文档 ID 删除其全部向量分块。"""
+    await asyncio.sleep(0.05)
+    try:
+        if not rag.delete_document(doc_id):
+            return fail(404, '文档不存在')
+    except rag.RagError as e:
+        return fail(500, str(e))
+    return {'ok': True}
+
+
+@app.post('/api/admin/search')
+async def admin_search(payload: dict = Body(default=None), _: str = Depends(get_current_admin)):
+    """检索测试：把问题向量化后在知识库中做相似度比对，返回命中片段。"""
+    p = payload or {}
+    query = (p.get('query') or '').strip()
+    if not query:
+        return fail(400, '请输入检索内容')
+    top_k = _clamp_int(p.get('topK'), 1, 20, rag.TOP_K)
+    try:
+        return rag.retrieve(query, top_k=top_k)
+    except rag.RagError as e:
+        return fail(400, str(e))
+
+
+# ================= 后台管理（用户管理） =================
+# role 权限等级：0 普通用户 / 1 管理员 / 2 超级管理员
+ROLE_USER, ROLE_ADMIN, ROLE_SUPER = 0, 1, 2
+
+
+def _row_to_user(row):
+    return {
+        'id': row['id'],
+        'username': row['username'],
+        'phone': row['phone'],
+        'avatar': row['avatar'],
+        'role': row['role'],
+        'createdAt': row['created_at'].strftime('%Y-%m-%d %H:%M'),
+    }
+
+
+_USER_COLS = 'id, username, phone, avatar, role, created_at'
+
+
+@app.get('/api/admin/users')
+async def admin_list_users(_: dict = Depends(get_current_admin)):
+    """用户列表：包含普通用户与管理员，超级管理员置顶。"""
+    await asyncio.sleep(0.05)
+    rows = db.query(f'SELECT {_USER_COLS} FROM users ORDER BY role DESC, id ASC')
+    return [_row_to_user(r) for r in rows]
+
+
+@app.post('/api/admin/users')
+async def admin_create_user(payload: dict = Body(default=None),
+                            current: dict = Depends(get_current_admin)):
+    """新增用户，role 只能给 0（普通用户）或 1（管理员）；授予权限仅限超级管理员。"""
+    await asyncio.sleep(LATENCY)
+    p = payload or {}
+    username = (p.get('username') or '').strip()
+    password = p.get('password') or ''
+    phone = (p.get('phone') or '').strip()
+    if not username or not password:
+        return fail(400, '请填写用户名和密码')
+    if len(username) > 50:
+        return fail(400, '用户名不能超过 50 个字符')
+    if len(password) < 6:
+        return fail(400, '密码长度至少 6 位')
+    if phone and not re.fullmatch(r'1\d{10}', phone):
+        return fail(400, '手机号格式不正确')
+    if db.query_one('SELECT id FROM users WHERE username=%s', (username,)):
+        return fail(409, '用户名已存在')
+    role = _clamp_int(p.get('role'), ROLE_USER, ROLE_ADMIN, ROLE_USER)
+    if role != ROLE_USER and current['role'] < ROLE_SUPER:
+        return fail(403, '仅超级管理员可授予后台管理权限')
+    uid = db.insert(
+        'INSERT INTO users (username, password_hash, phone, avatar, role)'
+        ' VALUES (%s,%s,%s,%s,%s)',
+        (username, auth.hash_password(password), phone or None, username[:1].upper(), role),
+    )
+    row = db.query_one(f'SELECT {_USER_COLS} FROM users WHERE id=%s', (uid,))
+    return _row_to_user(row)
+
+
+@app.put('/api/admin/users/{user_id}')
+async def admin_update_user(user_id: int, payload: dict = Body(default=None),
+                            current: dict = Depends(get_current_admin)):
+    """编辑用户：用户名、手机号、密码、权限等级（留空字段不改）；权限变更仅限超级管理员。"""
+    await asyncio.sleep(LATENCY)
+    p = payload or {}
+    row = db.query_one('SELECT id, username, role FROM users WHERE id=%s', (user_id,))
+    if not row:
+        return fail(404, '用户不存在')
+
+    fields, args = [], []
+    if 'username' in p:
+        username = (p.get('username') or '').strip()
+        if not username:
+            return fail(400, '用户名不能为空')
+        if len(username) > 50:
+            return fail(400, '用户名不能超过 50 个字符')
+        if username != row['username'] and db.query_one(
+                'SELECT id FROM users WHERE username=%s', (username,)):
+            return fail(409, '用户名已存在')
+        fields += ['username=%s', 'avatar=%s']
+        args += [username, username[:1].upper()]
+    if 'phone' in p:
+        phone = (p.get('phone') or '').strip()
+        if phone and not re.fullmatch(r'1\d{10}', phone):
+            return fail(400, '手机号格式不正确')
+        fields.append('phone=%s')
+        args.append(phone or None)
+    if 'role' in p:
+        if current['role'] < ROLE_SUPER:
+            return fail(403, '仅超级管理员可修改用户权限')
+        want = _clamp_int(p.get('role'), ROLE_USER, ROLE_SUPER, ROLE_USER)
+        if row['role'] == ROLE_SUPER:
+            if want != ROLE_SUPER:
+                return fail(400, '超级管理员不可取消管理员权限')
+        elif want == ROLE_SUPER:
+            return fail(400, '超级管理员全局唯一，不可通过接口授予')
+        else:
+            fields.append('role=%s')
+            args.append(want)
+    if p.get('password'):
+        if len(p['password']) < 6:
+            return fail(400, '密码长度至少 6 位')
+        fields.append('password_hash=%s')
+        args.append(auth.hash_password(p['password']))
+    if not fields:
+        return fail(400, '没有需要更新的内容')
+
+    args.append(user_id)
+    db.execute('UPDATE users SET ' + ', '.join(fields) + ' WHERE id=%s', tuple(args))
+    updated = db.query_one(f'SELECT {_USER_COLS} FROM users WHERE id=%s', (user_id,))
+    return _row_to_user(updated)
+
+
+@app.delete('/api/admin/users/{user_id}')
+async def admin_delete_user(user_id: int, current: dict = Depends(get_current_admin)):
+    """删除用户（连带其偏好/策略/账户/自选股）。
+
+    超级管理员与当前登录账号不可删；普通管理员只能删除普通用户，不能删除管理员账号。
+    """
+    await asyncio.sleep(LATENCY)
+    row = db.query_one('SELECT id, role FROM users WHERE id=%s', (user_id,))
+    if not row:
+        return fail(404, '用户不存在')
+    if row['role'] == ROLE_SUPER:
+        return fail(400, '超级管理员不可删除')
+    if row['id'] == current['id']:
+        return fail(400, '不能删除当前登录账号')
+    if row['role'] >= ROLE_ADMIN and current['role'] < ROLE_SUPER:
+        return fail(403, '仅超级管理员可删除管理员账号')
+    db.execute('DELETE FROM users WHERE id=%s', (user_id,))
+    return {'ok': True}
 
 
 # ================= 策略 / 回测 =================
@@ -859,6 +1168,11 @@ async def save_strategy(payload: dict = Body(default=None), uid: int = Depends(g
 @app.delete('/api/strategy/saved/{strategy_id}')
 async def delete_saved_strategy(strategy_id: int, uid: int = Depends(get_current_user)):
     await asyncio.sleep(0.1)
+    # 先关掉绑定该策略的账户自动交易：strategy_id 由外键置空，auto_trade 不会被连带关闭
+    db.execute(
+        'UPDATE accounts SET auto_trade=0 WHERE user_id=%s AND strategy_id=%s',
+        (uid, strategy_id),
+    )
     affected = db.execute('DELETE FROM saved_strategies WHERE id=%s AND user_id=%s', (strategy_id, uid))
     if not affected:
         return fail(404, '策略不存在')

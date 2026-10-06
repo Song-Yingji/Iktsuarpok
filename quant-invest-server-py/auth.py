@@ -9,6 +9,7 @@ import time
 SECRET_KEY = os.environ.get('XB_QUANT_SECRET', 'xb-quant-internal-secret')
 _TOKEN_TTL = 30 * 24 * 3600  # 30 天
 _PBKDF2_ITERATIONS = 100000
+_ADMIN_SCOPE = 'admin'       # 管理员 token 的 scope 前缀，与普通用户 token 互不通用
 
 
 def hash_password(password):
@@ -49,6 +50,31 @@ def parse_token(token):
             return None
         payload = f'{uid_str}:{exp_str}'.encode('utf-8')
         expect = hmac.new(SECRET_KEY.encode('utf-8'), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expect, sig):
+            return None
+        return int(uid_str)
+    except Exception:
+        return None
+
+
+def make_admin_token(user_id):
+    """生成管理员 token：base64(admin:user_id:exp).signature。"""
+    exp = int(time.time()) + _TOKEN_TTL
+    raw = f'{_ADMIN_SCOPE}:{user_id}:{exp}'
+    sig = hmac.new(SECRET_KEY.encode('utf-8'), raw.encode('utf-8'), hashlib.sha256).hexdigest()
+    b64 = base64.urlsafe_b64encode(raw.encode('utf-8')).decode('utf-8')
+    return b64 + '.' + sig
+
+
+def parse_admin_token(token):
+    """校验管理员 token 并返回用户 id；scope 不符、无效或过期返回 None。"""
+    try:
+        b64, sig = token.split('.')
+        raw = base64.urlsafe_b64decode(b64.encode('utf-8')).decode('utf-8')
+        scope, uid_str, exp_str = raw.split(':')
+        if scope != _ADMIN_SCOPE or int(exp_str) < int(time.time()):
+            return None
+        expect = hmac.new(SECRET_KEY.encode('utf-8'), raw.encode('utf-8'), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expect, sig):
             return None
         return int(uid_str)

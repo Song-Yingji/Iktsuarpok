@@ -22,6 +22,8 @@ const saving = ref(false)
 const showForm = ref(false)
 const editingId = ref(null)   // null 表示新增
 const form = ref({ ...DEFAULT_PREFS, name: '' })
+const sectorView = ref(null)  // 查看完整关注行业的偏好，null 表示未打开
+const SECTOR_PREVIEW = 3      // 卡片上最多展示的关注行业数量
 
 async function load() {
   loading.value = true
@@ -70,6 +72,11 @@ function toggleSector(sec) {
   if (i >= 0) list.splice(i, 1)
   else list.push(sec)
   form.value = { ...form.value, sectors: list }
+}
+
+function openSectors(p) {
+  if (p.sectors.length <= SECTOR_PREVIEW) return
+  sectorView.value = p
 }
 
 async function saveForm() {
@@ -156,9 +163,19 @@ onMounted(load)
         </div>
 
         <div class="pref-label">关注行业</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <Chip v-for="s in p.sectors" :key="s" :active="true">{{ s }}</Chip>
-          <span v-if="!p.sectors.length" style="font-size:12px;color:var(--text-3)">不限</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <template v-if="p.sectors.length">
+            <Chip v-for="s in p.sectors.slice(0, SECTOR_PREVIEW)" :key="s" :active="true">{{ s }}</Chip>
+            <button
+              v-if="p.sectors.length > SECTOR_PREVIEW"
+              class="more-chip"
+              :title="`查看全部 ${p.sectors.length} 个关注行业`"
+              @click="openSectors(p)"
+            >
+              +{{ p.sectors.length - SECTOR_PREVIEW }}
+            </button>
+          </template>
+          <span v-else style="font-size:12px;color:var(--text-3)">不限</span>
         </div>
 
         <div class="pref-nums">
@@ -251,12 +268,37 @@ onMounted(load)
         <Button icon="check" :loading="saving" @click="saveForm">保存</Button>
       </template>
     </Modal>
+
+    <!-- 查看某套偏好的完整关注行业 -->
+    <Modal
+      :open="!!sectorView"
+      :title="sectorView ? `关注行业 · ${sectorView.name}` : ''"
+      :width="480"
+      @close="sectorView = null"
+    >
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <Chip v-for="s in sectorView?.sectors || []" :key="s" :active="true">{{ s }}</Chip>
+      </div>
+      <template #footer>
+        <Button variant="ghost" @click="sectorView = null">关闭</Button>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <style scoped>
 .pref-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .pref-label { font-size: 12.5px; color: var(--text-2); margin-bottom: 8px; }
+.more-chip {
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: transparent;
+  border: 1px dashed var(--border-light);
+  color: var(--text-3);
+  font-size: 12.5px;
+  transition: all 0.15s;
+}
+.more-chip:hover { border-color: var(--accent); color: var(--accent-2); }
 .pref-nums {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

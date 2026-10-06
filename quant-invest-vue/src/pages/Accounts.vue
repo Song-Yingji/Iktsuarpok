@@ -19,7 +19,7 @@ const strategies = ref([])
 const loading = ref(false)
 const savingId = ref(null)
 
-// 全局设置：与投资偏好无关，独立于偏好保存
+// 交易提醒：与投资偏好无关的独立开关，不参与荐股提示词
 const settings = ref({ tradeNotify: true })
 
 const showCreate = ref(false)
@@ -49,7 +49,6 @@ async function onTradeNotify(checked) {
   try {
     await settingsApi.save({ tradeNotify: checked })
     settings.value = { ...settings.value, tradeNotify: checked }
-    toast('全局设置已保存')
   } catch (e) {
     toast(e.message, 'error')
   }
@@ -129,12 +128,12 @@ onMounted(() => {
       <StatCard icon="bolt" label="自动交易" :value="autoCount" :sub="`${accounts.length} 个账户中已开启`" :tone="autoCount > 0 ? 'up' : ''" />
     </div>
 
-    <!-- 全局设置：与投资偏好无关，单独保存 -->
-    <Card class="mt-16" title="全局设置">
+    <!-- 交易提醒： -->
+    <Card class="mt-16">
       <div class="account-row">
         <div style="display:flex;flex-direction:column;gap:3px">
           <span>交易提醒</span>
-          <small style="color:var(--text-3);font-size:11.5px">产生交易信号或成交时推送通知，与投资偏好无关</small>
+          <small style="color:var(--text-3);font-size:11.5px">产生交易信号或成交时推送通知</small>
         </div>
         <Toggle :checked="settings.tradeNotify" @change="onTradeNotify" />
       </div>

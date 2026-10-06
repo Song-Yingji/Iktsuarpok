@@ -21,6 +21,9 @@ llm_config.py
 # 历史行情本地缓存（运行时自动生成，勿提交）
 _history_cache.json
 
+# 向量知识库本地存储（Chroma 持久化目录，运行时自动生成，勿提交）
+quant-invest-server-py/kb_store/
+
 # ===== Node / Vite =====
 node_modules/
 dist/

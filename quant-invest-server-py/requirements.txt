@@ -4,3 +4,6 @@ easyquotation>=0.7.7
 baostock>=0.8.8
 requests>=2.25
 pymysql>=1.1
+python-multipart>=0.0.6
+chromadb>=0.4.24
+pypdfium2>=4.0

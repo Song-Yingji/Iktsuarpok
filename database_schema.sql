@@ -23,20 +23,40 @@ USE xb_quant;
 -- ------------------------------------------------------------
 -- 1. 用户表（替代当前 mock 鉴权）
 -- 对应后端 /api/auth/register 的 username/password/phone
--- 密码只存哈希（bcrypt / argon2），绝不存明文
+-- 密码只存哈希（PBKDF2 加盐），绝不存明文
+-- role：权限等级，0 普通用户 / 1 管理员 / 2 超级管理员
+--       1 及以上可登录 /admin/login 进入管理后台
+--       2 为超级管理员，全局唯一（由后端启动时播种），不可删除、不可取消管理员身份
 -- ------------------------------------------------------------
 CREATE TABLE users (
-  id            INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户ID（自增）',
-  username      VARCHAR(50)  NOT NULL                COMMENT '用户名（唯一，登录凭证）',
-  password_hash VARCHAR(255) NOT NULL                COMMENT '密码哈希（bcrypt/argon2）',
-  phone         VARCHAR(20)  DEFAULT NULL            COMMENT '手机号（注册选填，1 开头的 11 位）',
-  avatar        VARCHAR(10)  DEFAULT NULL            COMMENT '头像字符（用户名首字母大写）',
-  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  id            INT UNSIGNED     NOT NULL AUTO_INCREMENT COMMENT '用户ID（自增）',
+  username      VARCHAR(50)      NOT NULL                COMMENT '用户名（唯一，登录凭证）',
+  password_hash VARCHAR(255)     NOT NULL                COMMENT '密码哈希（PBKDF2 加盐）',
+  phone         VARCHAR(20)      DEFAULT NULL            COMMENT '手机号（注册选填，1 开头的 11 位）',
+  avatar        VARCHAR(10)      DEFAULT NULL            COMMENT '头像字符（用户名首字母大写）',
+  role          TINYINT UNSIGNED NOT NULL DEFAULT 0      COMMENT '权限等级：0普通用户 1管理员 2超级管理员',
+  created_at    DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at    DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='用户表';
+
+-- 已建库升级（新库执行上面建表后无需执行；老库按自身情况二选一执行）：
+--
+-- 【场景 A】老库还没有任何权限字段，直接加 role：
+-- ALTER TABLE users
+--   ADD COLUMN role TINYINT UNSIGNED NOT NULL DEFAULT 0
+--     COMMENT '权限等级：0普通用户 1管理员 2超级管理员' AFTER avatar;
+--
+-- 【场景 B】老库已有 is_admin / is_super（本仓库早期版本），先加 role 回填再删旧字段：
+-- ALTER TABLE users
+--   ADD COLUMN role TINYINT UNSIGNED NOT NULL DEFAULT 0
+--     COMMENT '权限等级：0普通用户 1管理员 2超级管理员' AFTER avatar;
+-- UPDATE users SET role = CASE WHEN is_super = 1 THEN 2 WHEN is_admin = 1 THEN 1 ELSE 0 END;
+-- ALTER TABLE users DROP COLUMN is_admin, DROP COLUMN is_super;
+--
+-- 超级管理员账号由后端首次启动时按 admin_config.py 自动播种（role=2），无需手工插入。
 
 -- ------------------------------------------------------------
 -- 2. 投资偏好表（1 用户 : N 套）

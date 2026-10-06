@@ -4,9 +4,22 @@
 // ============================================================
 const BASE_URL = import.meta.env.VITE_API_BASE || 'http://localhost:3000/api'
 
+// 普通用户与后台管理员各自独立保存 token，互不影响
+const SCOPES = {
+  user: { token: 'quant_token', user: 'quant_user', login: '/login', public: ['/login', '/register'] },
+  admin: { token: 'admin_token', user: 'admin_user', login: '/admin/login', public: ['/admin/login'] }
+}
+
+function onUnauthorized(scope) {
+  localStorage.removeItem(scope.token)
+  localStorage.removeItem(scope.user)
+  if (!scope.public.includes(location.pathname)) location.href = scope.login
+}
+
 async function request(path, options = {}) {
   const method = options.method || 'GET'
-  const token = localStorage.getItem('quant_token')
+  const scope = SCOPES[options.scope] || SCOPES.user
+  const token = localStorage.getItem(scope.token)
   let res
   try {
     res = await fetch(BASE_URL + path, {
@@ -22,11 +35,31 @@ async function request(path, options = {}) {
   }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    if (res.status === 401) {
-      localStorage.removeItem('quant_token')
-      localStorage.removeItem('quant_user')
-      if (!['/login', '/register'].includes(location.pathname)) location.href = '/login'
-    }
+    if (res.status === 401) onUnauthorized(scope)
+    throw new Error(data.message || `请求失败 (${res.status})`)
+  }
+  return data
+}
+
+/** 上传单个文件（multipart/form-data，仅后台使用） */
+async function upload(path, file) {
+  const scope = SCOPES.admin
+  const token = localStorage.getItem(scope.token)
+  const form = new FormData()
+  form.append('file', file)
+  let res
+  try {
+    res = await fetch(BASE_URL + path, {
+      method: 'POST',
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+      body: form
+    })
+  } catch (e) {
+    throw new Error('无法连接后端服务，请确认服务已启动')
+  }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    if (res.status === 401) onUnauthorized(scope)
     throw new Error(data.message || `请求失败 (${res.status})`)
   }
   return data
@@ -137,6 +170,7 @@ export const agentApi = {
    * @param {Array} messages - 对话历史 [{role: 'user'|'assistant', content: '...'}, ...]
    * @param {Object} h - 事件回调
    * @param {Function} h.onText - 文本增量 (text) => void
+   * @param {Function} h.onRag - 知识库检索命中条数 ({count, sources}) => void
    * @param {Function} h.onStrategy - 策略生成 (strategy) => void
    * @param {Function} h.onDone - 结束 () => void
    * @param {Function} h.onError - 错误 (err) => void
@@ -145,7 +179,8 @@ export const agentApi = {
   chatStream(messages, h = {}) {
     return openStream('/agent/generate-strategy', { messages }, {
       onEvent(evt) {
-        if (evt.type === 'text') h.onText?.(evt.data)
+        if (evt.type === 'rag') h.onRag?.(evt.data)
+        else if (evt.type === 'text') h.onText?.(evt.data)
         else if (evt.type === 'strategy') h.onStrategy?.(evt.data)
         else if (evt.type === 'done') h.onDone?.()
       },
@@ -198,4 +233,19 @@ export const accountApi = {
   update: (id, patch) => request('/accounts/' + id, { method: 'PUT', body: patch }),
   create: (payload) => request('/accounts', { method: 'POST', body: payload }),
   remove: (id) => request('/accounts/' + id, { method: 'DELETE' })
+}
+
+// ---------------- 后台管理（知识库 + 用户） ----------------
+export const adminApi = {
+  login: (payload) => request('/admin/login', { method: 'POST', body: payload, scope: 'admin' }),
+  stats: () => request('/admin/kb/stats', { scope: 'admin' }),
+  docs: () => request('/admin/docs', { scope: 'admin' }),
+  upload: (file) => upload('/admin/docs', file),
+  removeDoc: (id) => request('/admin/docs/' + id, { method: 'DELETE', scope: 'admin' }),
+  search: (payload) => request('/admin/search', { method: 'POST', body: payload, scope: 'admin' }),
+
+  users: () => request('/admin/users', { scope: 'admin' }),
+  createUser: (payload) => request('/admin/users', { method: 'POST', body: payload, scope: 'admin' }),
+  updateUser: (id, payload) => request('/admin/users/' + id, { method: 'PUT', body: payload, scope: 'admin' }),
+  removeUser: (id) => request('/admin/users/' + id, { method: 'DELETE', scope: 'admin' })
 }

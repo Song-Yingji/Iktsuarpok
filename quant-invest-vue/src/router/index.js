@@ -4,6 +4,8 @@ import { useApp } from '../store/app'
 const routes = [
   { path: '/login', component: () => import('../pages/Login.vue') },
   { path: '/register', component: () => import('../pages/Register.vue') },
+  { path: '/admin/login', component: () => import('../pages/AdminLogin.vue') },
+  { path: '/admin', component: () => import('../pages/Admin.vue') },
   {
     path: '/',
     component: () => import('../components/Layout.vue'),
@@ -27,6 +29,14 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  // 后台与前台是两套独立登录态，各自校验各自的 token
+  if (to.path.startsWith('/admin')) {
+    const isLogin = to.path === '/admin/login'
+    const adminToken = localStorage.getItem('admin_token')
+    if (isLogin) return adminToken ? '/admin' : true
+    return adminToken ? true : '/admin/login'
+  }
+
   const { user } = useApp()
   if (!user.value && to.path !== '/login' && to.path !== '/register') {
     return '/login'

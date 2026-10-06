@@ -5,14 +5,17 @@
 ## 功能特性
 
 - **真实行情引擎**：24 只 A 股 + 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
-- **AI 策略生成（Quant Buffett）**：用自然语言描述投资想法，大模型流式返回对话内容与结构化策略，可一键保存到「我的量化策略」
+- **AI 策略生成（Quant Buffett）**：用自然语言描述投资想法，大模型流式返回对话内容与结构化策略，可一键保存到「我的量化策略」；内置 RAG 检索增强，回答前先召回本地知识库片段
 - **AI 智能荐股（Recommend Buffett）**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
+- **向量知识库（RAG）**：独立后台管理页上传文档，经递归分块与本地 Ollama `qwen3-embedding` 向量化后写入本地 Chroma，策略生成时按相似度召回 Top-K 片段拼入提示词
+- **知识库管理后台**：左侧功能导航（用户管理 / 上传文档 / 检索测试）+ 右侧面板，支持文档上传 / 列表 / 删除、知识库统计与检索测试
+- **后台用户管理**：查看全部用户（含管理员），新增 / 编辑 / 删除账号；权限变更（是否管理员）与删除管理员账号仅超级管理员可操作，普通管理员只能删除普通用户，且变更即时生效（每次请求回库复核）
 - **策略回测**：内置双均线、MACD、布林带、RSI、动量突破 5 种回测引擎，选择标的 / 区间 / 框架即可回测
 - **回测指标**：总收益、年化收益、最大回撤、夏普比率、CVaR、胜率、盈亏比等
 - **账户管理**：模拟盘 / 实盘账户独立管理，支持新增、解绑、绑定已保存策略与自动交易开关
 - **财经资讯**：财联社 7×24 小时快讯，分类浏览、关键词检索、情绪标签
 - **投资偏好**：可保存多套偏好并自定义名称，设为默认供荐股使用；列表式管理，新增 / 编辑通过弹窗完成
-- **全局设置**：交易提醒等与偏好无关的开关独立保存，位于账户页
+- **交易提醒**：与投资偏好无关的独立开关，存于 `user_settings`，不参与荐股提示词
 
 ## 技术栈
 
@@ -22,28 +25,32 @@
 | 后端 | Python · FastAPI · Uvicorn · PyMySQL |
 | 数据库 | MySQL 5.7+ |
 | 大模型 | OpenAI 兼容 API（默认小米 MiMo，可切换任意兼容模型） |
+| 向量知识库 | Chroma（本地持久化）· 本地 Ollama `qwen3-embedding:0.6b` 向量化（1024 维） |
 
 ## 目录结构
 
 ```
 Iktsuarpok/
 ├── quant-invest-server-py/       # Python 后端（FastAPI）
-│   ├── main.py                   # 路由、鉴权、指标计算、回测、智能体 SSE 接口
+│   ├── main.py                   # 路由、鉴权、指标计算、回测、智能体 SSE、后台管理接口
 │   ├── data.py                   # 行情 / 新闻数据引擎与静态配置
 │   ├── db.py                     # MySQL 数据访问层
-│   ├── auth.py                   # PBKDF2 密码哈希与 HMAC 签名 token
+│   ├── auth.py                   # PBKDF2 密码哈希与 HMAC 签名 token（用户 / 管理员双 scope）
+│   ├── admin_config.py           # 超级管理员账号（仅首次启动播种，全局唯一、不可删除）
+│   ├── rag.py                    # 本地向量知识库：文本抽取 → 递归分块 → 向量化 → Chroma
 │   ├── llm.py                    # 大模型接入层（流式调用 + 系统提示词）
-│   ├── llm_config.py             # 大模型 API 配置（已 gitignore，需自行创建）
+│   ├── llm_config.py             # 大模型 / 向量化模型 API 配置（已 gitignore，需自行创建）
 │   ├── db_config.py              # 数据库连接配置（已 gitignore，需自行创建）
+│   ├── kb_store/                 # Chroma 向量库本地持久化目录（运行时自动生成，已 gitignore）
 │   ├── utils.py                  # 确定性伪随机工具
 │   └── requirements.txt          # 后端依赖
 ├── quant-invest-vue/             # 前端（Vue 3 + Vite）
 │   ├── src/
-│   │   ├── api/index.js          # 统一请求封装 + SSE 流式解析
-│   │   ├── components/           # Layout、智能体组件、通用 ui 组件
+│   │   ├── api/index.js          # 统一请求封装 + SSE 流式解析 + 用户 / 管理员双 token
+│   │   ├── components/           # Layout、智能体组件、通用 ui 组件、admin 后台面板（用户 / 文档 / 检索）
 │   │   ├── lib/                  # constants.js 静态选项、utils.js 格式化
-│   │   ├── pages/                # 各业务页面
-│   │   ├── router/index.js       # 路由与登录守卫
+│   │   ├── pages/                # 各业务页面（含 Admin.vue / AdminLogin.vue 后台）
+│   │   ├── router/index.js       # 路由与登录守卫（前台 / 后台两套独立登录态）
 │   │   ├── store/                # app.js 全局状态、agent.js 智能体状态
 │   │   └── styles/global.css
 │   ├── index.html
@@ -60,6 +67,7 @@ Iktsuarpok/
 - Python 3.8+
 - Node.js 18+
 - MySQL 5.7+
+- Ollama（可选，用于本地对话模型与向量化模型；不装也可改配任意 OpenAI 兼容的云端服务）
 
 ### 1. 初始化数据库
 
@@ -71,18 +79,37 @@ mysql -u root -p --default-character-set=utf8mb4 < database_schema.sql
 
 然后在 `quant-invest-server-py/db_config.py` 中填写连接信息（默认 `127.0.0.1:3306`，用户 `root`）。
 
-### 2. 配置大模型
+### 2. 配置大模型与向量化模型
 
-在 `quant-invest-server-py/llm_config.py` 中填写 OpenAI 兼容接口的配置：
+在 `quant-invest-server-py/llm_config.py` 中填写配置。对话模型与向量化模型相互独立：
 
 ```python
 # -*- coding: utf-8 -*-
+# ====== 对话模型（策略生成 / 智能荐股） ======
 API_BASE_URL = 'https://your-endpoint/v1'   # 需以 /v1 结尾
 API_KEY = 'your-api-key'
 MODEL_NAME = 'your-model-name'
+
+# ====== 向量化模型（RAG 知识库专用） ======
+# 默认使用本地 Ollama 的 qwen3-embedding:0.6b（输出 1024 维向量），无需联网、无需申请 token。
+# Ollama 不校验 API Key，EMBED_API_KEY 填任意非空值即可（留空会回退为 'ollama'）。
+EMBED_BASE_URL = 'http://localhost:11434/v1'
+EMBED_API_KEY = 'ollama'
+EMBED_MODEL = 'qwen3-embedding:0.6b'
 ```
 
 > 可切换为任意 OpenAI 兼容服务（含本地 Ollama，`API_BASE_URL` 填 `http://localhost:11434/v1` 即可）。模型越小对长系统提示词的指令遵循越弱，建议使用 7B 以上模型以保证策略 JSON 的格式正确率。
+> 向量化模型同理，任何兼容 `/embeddings` 接口的服务都可替换 `EMBED_BASE_URL` / `EMBED_MODEL`，例如阿里云百炼的 `text-embedding-v3`（同样 1024 维）；换模型后建议清空 `kb_store/` 重新建立索引，避免不同模型的向量混用。
+
+#### 本地向量模型准备（Ollama）
+
+```bash
+ollama pull qwen3-embedding:0.6b   # 约 0.6GB，输出 1024 维向量
+ollama list                        # 确认模型已就绪
+```
+
+> 验证接口可用：`curl http://localhost:11434/v1/embeddings -d '{"model":"qwen3-embedding:0.6b","input":"测试"}'`，返回 1024 个浮点数即正常。
+> 该项目也支持批量的 `/v1/embeddings`（`input` 传数组），后台一次请求编码 10 个分块。
 
 ### 3. 启动后端（端口 3000）
 
@@ -114,8 +141,11 @@ npm run dev
 - 财经资讯：分类浏览与关键词搜索
 - AI 智能体：智能荐股（Recommend Buffett）、策略生成（Quant Buffett），均为流式对话
 - 量化策略：已保存的智能体策略列表、删除、选择回测标的 / 区间 / 框架并查看回测结果
-- 账户管理：账户列表、新增 / 解绑账户、绑定已保存策略、自动交易开关，以及全局设置（交易提醒）
+- 账户管理：账户列表、新增 / 解绑账户、绑定已保存策略、自动交易开关、交易提醒开关
 - 投资偏好：多套偏好的列表管理，新增 / 编辑通过弹窗完成，可设为默认供荐股使用
+- 后台管理（`/admin/login`）：左侧功能导航 + 右侧面板，分为用户管理、上传文档、检索测试三块；管理员登录后可管理账号与后台权限、上传 / 删除文档、查看知识库统计、做检索测试
+
+> 后台管理入口与前台的登录态完全独立（各自保存 token）。后台账号即 `users` 表中的普通用户，勾选「后台管理权限」后即可登录后台；超级管理员由后端首次启动时按 `admin_config.py` 播种（默认 `admin / 123456`），全局唯一且不可删除、不可取消管理员身份。
 
 ## 系统流程
 
@@ -133,8 +163,10 @@ graph TB
     end
 
     subgraph BE["后端 FastAPI (main.py)"]
-        AUTH[auth.py 密码哈希 + 签名 token]
+        AUTH[auth.py 密码哈希 + 签名 token<br/>用户 / 管理员双 scope]
+        ADMIN[admin_config.py 管理员固定账号]
         LLM[llm.py 大模型接入层]
+        RAG[rag.py 向量知识库<br/>分块 / 向量化 / 检索]
         DATA[data.py 行情 / 新闻引擎]
         DB[db.py MySQL 数据访问]
         UTIL[utils.py 确定性伪随机]
@@ -145,9 +177,11 @@ graph TB
         EQ[easyquotation<br/>实时快照 新浪源]
         CLS[财联社电报<br/>7×24 快讯]
         LLMS[大模型<br/>OpenAI 兼容 API]
+        EMB[本地 Ollama qwen3-embedding<br/>1024 维向量化]
     end
 
     MYSQL[(MySQL xb_quant)]
+    CHROMA[(Chroma 本地向量库<br/>kb_store/)]
 
     PAGES --> COMP
     PAGES --> APIJS
@@ -155,6 +189,8 @@ graph TB
     STORE --> APIJS
     APIJS -->|HTTP /api| BE
     LLM --> LLMS
+    RAG --> EMB
+    RAG --> CHROMA
     DATA --> BS
     DATA --> EQ
     DATA --> CLS
@@ -242,7 +278,7 @@ flowchart TD
 ```
 
 > 偏好名称在同一用户下唯一；用户保存的第一套偏好自动成为默认偏好。
-> 交易提醒等开关与偏好无关，单独存在 `user_settings`，在账户页的「全局设置」中配置。
+> 交易提醒开关与偏好无关，单独存在 `user_settings`，不参与荐股提示词，可在账户页调整。
 
 ### 5. AI 智能体：策略生成流式流程（Quant Buffett）
 
@@ -254,6 +290,7 @@ sequenceDiagram
     participant S as store/agent.js
     participant A as api/index.js
     participant M as main.py
+    participant R as rag.py + Chroma
     participant L as llm.py + 大模型
 
     U->>V: 输入消息并发送
@@ -262,7 +299,13 @@ sequenceDiagram
     S->>S: buildHistory 过滤欢迎语 / 空消息<br/>策略消息转为摘要文本
     S->>A: chatStream(history, handlers)
     A->>M: POST /api/agent/generate-strategy
-    M->>L: chat_stream(messages) 流式请求
+    M->>R: 把最新提问向量化并检索知识库 Top-K
+    R-->>M: 命中片段（含相似度）
+    M->>M: 片段与原始问题拼成新的用户消息
+    M-->>A: SSE rag 事件（命中条数）
+    A-->>S: onRag
+    S->>V: 气泡外右下角出现检索图标（0 条则不出现）
+    M->>L: chat_stream(拼接后的 messages) 流式请求
     loop 逐 chunk 返回
         L-->>M: 文本增量
         M->>M: 状态机：普通文本 / 策略 JSON 累积
@@ -278,6 +321,8 @@ sequenceDiagram
     S->>M: POST /api/strategy/saved
     S->>V: 提示已保存
 ```
+
+> 知识库为空、未配置向量模型或检索失败时，后端不推送 `rag` 事件并直接跳过检索，策略生成照常进行，RAG 不可用不影响主流程。
 
 #### 5.1 后端流式状态机
 
@@ -310,13 +355,52 @@ flowchart LR
     C --> G[退出登录<br/>resetAgentState 清空]
 ```
 
-### 6. 量化策略回测与账户绑定
+### 6. 向量知识库构建与 RAG 检索
+
+#### 6.1 后台构建知识库（管理员）
+
+```mermaid
+flowchart TD
+    A[后台登录页 /admin/login] --> B[POST /api/admin/login<br/>查 users 表校验密码，且 role ≥ 1]
+    B --> C[签发独立的管理员 token<br/>scope=admin 且携带用户 id，存 admin_token]
+    C --> D[管理后台 /admin<br/>左侧功能导航 + 右侧面板]
+    D --> U[用户管理<br/>列表 / 新增 / 编辑 / 删除 / 设置管理员]
+    U --> U1[每次请求回库复核<br/>账号被删或取消权限即失效]
+    D --> E[上传文档<br/>txt / md / csv / log / pdf / docx，≤10MB]
+    E --> F[文本抽取<br/>txt 自动识别 utf-8/gbk，pdf 用 pypdfium2，docx 解析 document.xml]
+    F --> G[递归分块<br/>段落 → 换行 → 中英文句读 → 空白<br/>目标 500 字 / 重叠 80 字]
+    G --> H[本地 Ollama qwen3-embedding 向量化<br/>每批 10 条，1024 维]
+    H --> I[写入本地 Chroma<br/>kb_store/ 持久化]
+    I --> J[文档列表 / 统计刷新<br/>同名文档覆盖旧索引]
+    D --> K[检索测试<br/>POST /api/admin/search]
+    K --> H
+```
+
+> 文档切块采用递归分块策略：优先按段落切，仍超长则依次降级到换行、中英文句读（`。！？；，、` 等）、空白，全部降级完仍超长才按字符硬切；过短的碎片会与相邻块合并，并给每块加上相邻 80 字重叠，避免语义被切断。
+
+#### 6.2 策略生成时的 RAG 检索
+
+```mermaid
+flowchart LR
+    A[用户提问] --> B[问题向量化<br/>qwen3-embedding]
+    B --> C[Chroma 余弦相似度检索<br/>Top-K，默认 4 条]
+    C --> D{相似度 ≥ 下限?<br/>默认 0.3}
+    D -- 否 --> E[不注入上下文<br/>推送 rag 事件 count=0]
+    D -- 是 --> F[命中片段拼成「参考资料」<br/>与原始问题组成新的用户消息]
+    F --> G[新提示词 + 系统提示词<br/>一起交给大模型]
+    E --> G
+    G --> H[流式返回回答与结构化策略]
+```
+
+> 检索到的片段以「## 参考资料（来自本地知识库，请优先依据以下内容回答）」的形式前置在用户问题之前，原问题保留在「## 我的问题」段落下，二者与代码里的系统提示词一起送入大模型。检索对用户无感，界面不展示命中了哪些文档；命中时会在该条回答的气泡外右下角出现一个检索图标（底部与气泡齐平），点击后浮层在图标右侧单行展开「已检索本地知识库，命中 N 条参考片段」，点击空白处或发起新操作会自动收起，未命中则不显示图标。为给浮层留出空间，本页机器人气泡宽度上限收窄至 64%。
+
+### 7. 量化策略回测与账户绑定
 
 ```mermaid
 flowchart TD
     A[量化策略页] --> B[GET /api/strategy/saved<br/>列出已保存的智能体策略]
     B --> C{操作}
-    C -- 删除 --> D[DELETE /api/strategy/saved/id]
+    C -- 删除 --> D[DELETE /api/strategy/saved/id<br/>绑定账户自动解绑并关闭自动交易]
     C -- 回测 --> E[选择回测标的 / 区间 / 框架]
     E --> F[POST /api/strategy/backtest]
     F --> G[展示指标与净值曲线<br/>总收益 / 年化 / 最大回撤 / 夏普 / CVaR / 胜率]
@@ -329,6 +413,8 @@ flowchart TD
 ```
 
 > 策略的新增入口只在智能体页（生成后点「保存到我的量化策略」），量化策略页仅支持删除与回测；账户只能绑定已保存的策略。
+>
+> 删除已保存的策略时，绑定该策略的账户会一并解绑并关闭自动交易（`strategy_id` 置空、`auto_trade` 归零），避免出现「自动交易开着却没有策略」的状态；智能体页历史消息上的「已保存」标记也会在再次进入该页时自动失效，可重新保存。
 
 ## API 概览
 
@@ -344,7 +430,7 @@ flowchart TD
 | PUT | `/api/prefs/{id}` | 编辑偏好 |
 | POST | `/api/prefs/{id}/default` | 设为荐股默认偏好 |
 | DELETE | `/api/prefs/{id}` | 删除偏好（删默认时自动补选一套） |
-| GET/POST | `/api/settings` | 全局设置（交易提醒，与偏好无关） |
+| GET/POST | `/api/settings` | 交易提醒开关（与偏好无关，不参与荐股提示词） |
 | POST | `/api/agent/recommend` | 智能荐股（SSE 流式，body 传 `prefsId`） |
 | POST | `/api/agent/generate-strategy` | 策略生成智能体（SSE 流式） |
 | GET | `/api/strategy/frameworks` | 回测框架列表 |
@@ -356,17 +442,34 @@ flowchart TD
 | GET/POST | `/api/accounts` | 账户列表 / 新增账户 |
 | PUT | `/api/accounts/{id}` | 更新账户 |
 | DELETE | `/api/accounts/{id}` | 解绑账户 |
+| POST | `/api/admin/login` | 后台管理员登录（查 `users` 表校验，要求 `role` ≥ 1） |
+| GET | `/api/admin/users` | 用户列表（含管理员，超级管理员置顶） |
+| POST | `/api/admin/users` | 新增用户（`role` 可给 0 普通用户 / 1 管理员；授予权限仅限超级管理员） |
+| PUT | `/api/admin/users/{id}` | 编辑用户（用户名 / 手机号 / 密码 / 权限等级；权限变更仅限超级管理员） |
+| DELETE | `/api/admin/users/{id}` | 删除用户（连带其偏好 / 策略 / 账户 / 自选股；普通管理员只能删普通用户） |
+| GET | `/api/admin/kb/stats` | 知识库统计（文档数 / 分块数 / 向量模型 / 存储位置） |
+| GET | `/api/admin/docs` | 已入库文档列表 |
+| POST | `/api/admin/docs` | 上传文档（multipart，≤10MB）并建立索引 |
+| DELETE | `/api/admin/docs/{id}` | 删除文档及其全部分块 |
+| POST | `/api/admin/search` | 检索测试（问题向量化后做相似度比对） |
 | GET | `/api/health` | 健康检查 |
+
+> 后台接口统一要求 `Authorization: Bearer <admin_token>`，由 `get_current_admin` 校验；管理员 token 的 scope 为 `admin` 且携带用户 id，与普通用户 token 互不通用，越权访问返回 401。
+>
+> 用户权限由 `users.role` 单字段表示：`0` 普通用户 / `1` 管理员 / `2` 超级管理员。**权限变更（授予 / 取消管理员）与删除管理员账号仅超级管理员可操作**：普通管理员调用用户管理接口时若携带 `role` 字段会被拒绝（403），删除 `role ≥ 1` 的账号也会被拒绝（403）；前端不会提交 `role` 字段，且权限开关、管理员行的删除按钮呈禁用态。删除用户与设置权限均受保护：超级管理员（`role=2`，全局唯一）不可删除、不可取消管理员身份，且不可通过接口授予；当前登录账号不可删除自己。删除用户时其偏好、策略、账户、自选股由外键 `ON DELETE CASCADE` 一并清理。
 
 ### 策略生成接口的流式协议
 
 `POST /api/agent/generate-strategy` 请求体为 `{ messages: [{role, content}, ...] }`，响应为 `text/event-stream`，每行一个事件：
 
 ```
+data: {"type":"rag","data":{"count":2,"sources":[{"docName":"...","score":0.812}]}}
 data: {"type":"text","data":"增量文本"}
 data: {"type":"strategy","data":{ "name": ..., "engineId": ..., "params": {...}, "rules": [...], "code": "..." }}
 data: {"type":"done","data":{}}
 ```
+
+后端先对最新一条用户提问做知识库检索，命中时把片段拼进该条消息，并通过 `rag` 事件把命中条数推给前端；前端只据此在气泡外右下角显示一个检索图标（点击可查看命中条数），不展示具体命中了哪些文档。知识库为空或不可用时 `count` 为 0，不做任何注入，也不显示图标。
 
 后端用 `===STRATEGY_JSON===` / `===END_STRATEGY===` 标记切分闲聊文本与策略 JSON；策略块不会以原始文本下发，解析成功才推送 `strategy` 事件。解析采用「标准 JSON（`strict=False`，容忍字符串内换行）→ 字段正则兜底」两级策略，兼容小模型输出的畸形 JSON。
 
@@ -394,8 +497,11 @@ data: {"type":"done","data":{}}
 | uvicorn | >=0.23 | ASGI 服务器，运行 FastAPI |
 | easyquotation | >=0.7.7 | 实时行情（新浪源） |
 | baostock | >=0.8.8 | 历史行情（前复权日 K） |
-| requests | >=2.25 | HTTP 请求（财联社新闻、大模型流式调用） |
+| requests | >=2.25 | HTTP 请求（财联社新闻、大模型流式调用、向量化接口） |
 | pymysql | >=1.1 | MySQL 数据库驱动 |
+| chromadb | >=0.4.24 | 本地向量知识库（持久化 + 余弦相似度检索） |
+| pypdfium2 | >=4.0 | PDF 文本抽取 |
+| python-multipart | >=0.0.6 | FastAPI 解析 multipart 上传 |
 
 ### 前端（npm · package.json）
 
@@ -412,6 +518,10 @@ data: {"type":"done","data":{}}
 - 行情（历史 K 线、实时快照）与财经新闻（财联社快讯）接入真实免费源，数据源失效时前端展示「系统繁忙，请稍后重试」等提示，不会降级为模拟数据；账户、偏好、自选股、已保存策略等用户数据持久化存储于 MySQL，按 `user_id` 隔离。本平台仅供学习演示，不构成任何投资建议。
 - 首次启动会联网拉取历史行情并缓存到本地 `_history_cache.json`，之后启动直接读缓存，无需重新联网。
 - 智能体对话记录保存在前端内存 store 中：切换页面不会丢失，刷新浏览器会重置，退出登录自动清空。
-- `db_config.py`（数据库密码）与 `llm_config.py`（大模型 API Key）含敏感信息，已加入 `.gitignore`，请勿提交到版本库。
+- 向量知识库数据保存在后端 `quant-invest-server-py/kb_store/`（Chroma 本地持久化目录），重启服务不丢失，已加入 `.gitignore`；删除该目录即清空知识库，需重新上传文档建立索引。
+- 向量化默认走本地 Ollama（`qwen3-embedding:0.6b`），上传文档与检索时需保证 Ollama 在 `localhost:11434` 运行；Ollama 未启动时后台会提示「向量化服务调用失败」，知识库不可用但策略生成等其它功能不受影响。换用其它向量模型后必须清空 `kb_store/` 重建索引，不同模型的向量不可混用。
+- 后台账号复用 `users` 表，权限由单字段 `role` 表示（`0` 普通用户 / `1` 管理员 / `2` 超级管理员）：`role ≥ 1` 即可登录后台，可在「用户管理」中开关授予（仅超级管理员可操作）。超级管理员（`role=2`）全局唯一，由后端首次启动时按 `admin_config.py` 播种（默认 `admin / 123456`），不可删除、不可取消管理员身份。老库升级：若表里已有旧的 `is_admin` / `is_super` 两个字段，按 `database_schema.sql` 中的「场景 B」SQL 合并为 `role`；若还没有权限字段，用「场景 A」。后台登录态与前台的 `quant_token` 完全独立。
+- 后台用户管理接口每次请求都会回库复核管理员身份，账号被删除或被取消权限后，其已签发的 token 立即失效（返回 401 并跳回登录页）。
+- `db_config.py`（数据库密码）与 `llm_config.py`（大模型 / 向量化模型 API Key）含敏感信息，已加入 `.gitignore`，请勿提交到版本库。
 - 后端默认监听 `127.0.0.1:3000`，前端通过环境变量 `VITE_API_BASE` 可覆盖其 API 地址（默认 `http://localhost:3000/api`）。
 - 股市有风险，投资需谨慎！

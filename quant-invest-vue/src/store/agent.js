@@ -14,6 +14,9 @@ const GREETING = '你好，我是策略生成智能体 Quant Buffett。你可以
 const messages = ref([{ role: 'bot', text: GREETING, typing: false, greeting: true }])
 const input = ref('')
 const typing = ref(false)
+// 当前展开检索浮层的消息下标。刻意放在 messages 之外：
+// 若挂到消息对象上，切换展开状态会触发 scrollDown 的深度侦听，把对话框拉到底部
+const ragOpenId = ref(null)
 let cancelStream = null  // 非响应式：中断流式请求
 
 function buildHistory() {
@@ -36,15 +39,22 @@ function send(text) {
   if (!prompt || typing.value) return
   input.value = ''
   typing.value = true
+  ragOpenId.value = null  // 新的操作：收起上一轮的检索浮层
 
   messages.value.push({ role: 'user', text: prompt })
 
-  const botMsg = { role: 'bot', text: '', typing: true, strategy: null, saved: false }
-  messages.value.push(botMsg)
+  // push 进数组的是原对象，直接改原对象不会触发视图更新，
+  // 这里读回代理再写，保证流式文本、策略卡片与检索标记能实时渲染
+  messages.value.push({ role: 'bot', text: '', typing: true, strategy: null, saved: false, rag: null })
+  const botMsg = messages.value[messages.value.length - 1]
 
   cancelStream = agentApi.chatStream(buildHistory(), {
     onText(chunk) {
       botMsg.text += chunk
+    },
+    onRag(data) {
+      // 只保留命中条数，用于气泡外的检索标记；具体命中哪些文档不在前端展示
+      if (data?.count) botMsg.rag = { count: data.count }
     },
     onStrategy(data) {
       botMsg.strategy = data
@@ -73,13 +83,33 @@ function stopGenerate() {
     last.text += '\n\n（已停止生成）'
   }
   typing.value = false
+  ragOpenId.value = null
 }
 
 async function saveStrategy(msg) {
   if (!msg.strategy) return
-  await strategyApi.save(msg.strategy)
+  const created = await strategyApi.save(msg.strategy)
   msg.saved = true
+  msg.savedId = created?.id ?? null
   toast('已保存到我的量化策略')
+}
+
+// 已保存的策略可能在「我的量化策略」页被删除，此时历史消息的保存标记要一并失效，
+// 否则「保存到我的量化策略」按钮不再出现，无法重新保存
+async function syncSavedFlags() {
+  let list
+  try {
+    list = await strategyApi.saved()
+  } catch {
+    return
+  }
+  const ids = new Set(list.map((s) => s.id))
+  for (const m of messages.value) {
+    if (m.saved && !ids.has(m.savedId)) {
+      m.saved = false
+      m.savedId = null
+    }
+  }
 }
 
 // ---------------- 自动荐股智能体 ----------------
@@ -190,6 +220,7 @@ function resetAgentState() {
   messages.value = [{ role: 'bot', text: GREETING, typing: false, greeting: true }]
   input.value = ''
   typing.value = false
+  ragOpenId.value = null
   recs.value = null
   recText.value = ''
   recRunning.value = false
@@ -200,7 +231,7 @@ function resetAgentState() {
 }
 
 export function useAgentChat() {
-  return { messages, input, typing, send, stopGenerate, saveStrategy }
+  return { messages, input, typing, ragOpenId, send, stopGenerate, saveStrategy, syncSavedFlags }
 }
 
 export function useRecommendAgent() {
