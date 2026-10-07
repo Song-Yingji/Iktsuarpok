@@ -14,9 +14,10 @@ echo    前端页面 : http://localhost:5189
 echo ============================================================
 echo.
 
-rem ---- 定位 Python 解释器（优先使用指定路径，找不到再回退 PATH） ----
+rem ---- 定位 Python 解释器（优先项目虚拟环境 .venv） ----
+set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 set "PYTHON_EXE="
-if exist "D:\math\python\python.exe" set "PYTHON_EXE=D:\math\python\python.exe"
+if exist "%VENV_PY%" set "PYTHON_EXE=%VENV_PY%"
 if not defined PYTHON_EXE (
     where python >nul 2>&1 && set "PYTHON_EXE=python"
 )
@@ -26,9 +27,16 @@ if not defined PYTHON_EXE (
     exit /b 1
 )
 
+if not exist "%VENV_PY%" (
+    echo [提示] 未检测到项目虚拟环境 .venv，将回退使用：%PYTHON_EXE%
+    echo        建议先创建虚拟环境并安装依赖：
+    echo            python -m venv .venv
+    echo            .venv\Scripts\python.exe -m pip install -r quant-invest-server-py\requirements.txt
+    echo.
+)
+
 rem ---- 定位 Node（优先使用指定路径，找不到再回退 PATH） ----
 set "NODE_EXE="
-if exist "C:\Users\77018\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\vm\tools\node\node.exe" set "NODE_EXE=C:\Users\77018\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\vm\tools\node\node.exe"
 if not defined NODE_EXE (
     where node >nul 2>&1 && set "NODE_EXE=node"
 )
@@ -55,7 +63,11 @@ if not exist "%FRONTEND_DIR%\node_modules\vite\bin\vite.js" (
     exit /b 1
 )
 
-echo [1/3] 启动后端服务（端口 3000）...
+echo [0/4] 使用 Python 解释器：%PYTHON_EXE%
+echo.
+echo [1/4] 使用 Node ：%NODE_EXE%
+echo.
+echo [2/4] 启动后端服务（端口 3000）...
 netstat -ano | findstr ":3000 " | findstr "LISTENING" >nul 2>&1
 if !errorlevel!==0 (
     echo        后端服务已在运行，跳过。
@@ -66,7 +78,7 @@ if !errorlevel!==0 (
     echo        后端服务已启动。
 )
 
-echo [2/3] 启动前端服务（端口 5189）...
+echo [3/4] 启动前端服务（端口 5189）...
 netstat -ano | findstr ":5189 " | findstr "LISTENING" >nul 2>&1
 if !errorlevel!==0 (
     echo        前端服务已在运行，跳过。
@@ -77,7 +89,7 @@ if !errorlevel!==0 (
     echo        前端服务已启动。
 )
 
-echo [3/3] 打开浏览器...
+echo [4/4] 打开浏览器...
 timeout /t 3 /nobreak >nul
 start "" http://localhost:5189
 

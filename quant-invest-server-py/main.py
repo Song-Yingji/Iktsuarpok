@@ -726,7 +726,7 @@ def _rag_context(query):
     if not (query or '').strip():
         return '', []
     try:
-        hits = rag.retrieve(query, top_k=RAG_TOP_K)
+        hits = rag.retrieve(query, top_k=RAG_TOP_K, serchtype=2)
     except rag.RagError:
         return '', []
     if not hits:

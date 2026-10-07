@@ -38,10 +38,12 @@ Iktsuarpok/
 │   ├── auth.py                   # PBKDF2 密码哈希与 HMAC 签名 token（用户 / 管理员双 scope）
 │   ├── admin_config.py           # 超级管理员账号（仅首次启动播种，全局唯一、不可删除）
 │   ├── rag.py                    # 本地向量知识库：文本抽取 → 递归分块 → 向量化 → Chroma
+│   ├── hybridserch.py            # 混合检索：BGE 稠密 + BM25 稀疏 + RRF 融合
 │   ├── llm.py                    # 大模型接入层（流式调用 + 系统提示词）
 │   ├── llm_config.py             # 大模型 / 向量化模型 API 配置（已 gitignore，需自行创建）
 │   ├── db_config.py              # 数据库连接配置（已 gitignore，需自行创建）
 │   ├── kb_store/                 # Chroma 向量库本地持久化目录（运行时自动生成，已 gitignore）
+│   ├── bgemodels/                # 本地 BGE-m3 混合检索模型权重（约 2.2GB，需另行下载，已 gitignore）
 │   ├── utils.py                  # 确定性伪随机工具
 │   └── requirements.txt          # 后端依赖
 ├── quant-invest-vue/             # 前端（Vue 3 + Vite）
@@ -55,6 +57,7 @@ Iktsuarpok/
 │   │   └── styles/global.css
 │   ├── index.html
 │   └── package.json
+├── .venv/                        # Python 虚拟环境（后端依赖安装于此，已 gitignore）
 ├── database_schema.sql           # 数据库建库建表脚本
 ├── 一键启动量化系统.bat          # 一键启动前后端（Windows）
 └── 停止量化系统.bat              # 停止前后端服务
@@ -64,12 +67,33 @@ Iktsuarpok/
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.10+（推荐 3.10 / 3.11；3.13 部分依赖可能尚无预编译 wheel）
 - Node.js 18+
 - MySQL 5.7+
 - Ollama（可选，用于本地对话模型与向量化模型；不装也可改配任意 OpenAI 兼容的云端服务）
 
-### 1. 初始化数据库
+### 1. 创建虚拟环境并安装后端依赖
+
+后端依赖统一装在项目根目录的 `.venv/` 中，与系统全局 Python 隔离（该目录已加入 `.gitignore`）。
+
+```bash
+# 在项目根目录执行
+python -m venv .venv          # 创建虚拟环境
+
+# Windows 激活
+.venv\Scripts\activate
+# macOS / Linux 激活
+source .venv/bin/activate
+
+# 激活后安装依赖（激活成功时命令行提示符前会出现 (.venv)）
+pip install --upgrade pip
+pip install -r quant-invest-server-py/requirements.txt
+```
+
+> 也可以不激活，直接用虚拟环境内的解释器绝对路径执行：`.venv\Scripts\python.exe`（Windows）或 `.venv/bin/python`（macOS / Linux）。
+> 创建时若 `python` 指向了 IDE 自带的解释器，请改用完整路径，例如 `D:\python\python.exe -m venv .venv`。
+
+### 2. 初始化数据库
 
 在项目根目录执行建库建表脚本（默认库名 `xb_quant`）：
 
@@ -79,7 +103,7 @@ mysql -u root -p --default-character-set=utf8mb4 < database_schema.sql
 
 然后在 `quant-invest-server-py/db_config.py` 中填写连接信息（默认 `127.0.0.1:3306`，用户 `root`）。
 
-### 2. 配置大模型与向量化模型
+### 3. 配置大模型与向量化模型
 
 在 `quant-invest-server-py/llm_config.py` 中填写配置。对话模型与向量化模型相互独立：
 
@@ -113,15 +137,17 @@ ollama list                        # 确认模型已就绪
 > 验证接口可用：`curl http://localhost:11434/v1/embeddings -d '{"model":"qwen3-embedding:0.6b","input":"测试"}'`，返回 1024 个浮点数即正常。
 > 该项目也支持批量的 `/v1/embeddings`（`input` 传数组），后台一次请求编码 10 个分块。
 
-### 3. 启动后端（端口 3000）
+### 4. 启动后端（端口 3000）
 
 ```bash
 cd quant-invest-server-py
-pip install -r requirements.txt
 python main.py
 ```
 
-### 4. 启动前端（端口 5189）
+> 依赖已在第 1 步装进 `.venv`，此处无需再执行 `pip install`。若未激活虚拟环境，请用绝对路径启动：`..\.venv\Scripts\python.exe main.py`。
+> 不要使用系统全局的 `python`：若 PATH 中存在 IDE 自带的解释器，它通常没有安装 fastapi，会直接报 `ModuleNotFoundError`。
+
+### 5. 启动前端（端口 5189）
 
 ```bash
 cd quant-invest-vue
@@ -129,11 +155,45 @@ npm install
 npm run dev
 ```
 
-### 5. 访问
+### 6. 访问
 
 浏览器打开 http://localhost:5189
 
 > Windows 下也可直接双击 `一键启动量化系统.bat` 自动完成上述步骤并打开浏览器；双击 `停止量化系统.bat` 可关闭服务。
+
+## 虚拟环境管理
+
+后端使用项目根目录的 `.venv/`，由 Python 标准库 `venv` 创建，不需要额外安装 virtualenv。
+
+| 操作 | Windows | macOS / Linux |
+| --- | --- | --- |
+| 激活 | `.venv\Scripts\activate` | `source .venv/bin/activate` |
+| 退出 | `deactivate` | `deactivate` |
+| 不激活直接运行 | `.venv\Scripts\python.exe main.py` | `.venv/bin/python main.py` |
+
+常用维护命令（激活后执行）：
+
+```bash
+pip list                        # 查看当前环境已安装的包
+pip install -r quant-invest-server-py/requirements.txt   # 按清单补装 / 更新依赖
+pip install <包名>              # 新增依赖，记得同步写入 requirements.txt
+```
+
+删除重建（环境损坏，或需要更换 Python 版本时）：
+
+```bash
+# Windows
+rmdir /s /q .venv
+python -m venv .venv
+
+# macOS / Linux
+rm -rf .venv
+python3 -m venv .venv
+```
+
+> `.venv/` 已加入 `.gitignore`，不会提交到版本库；换机器后重新执行「快速开始」第 1 步即可，无需拷贝环境目录。
+> 切换 Python 大版本（如 3.10 → 3.12）后必须删除 `.venv` 重建，否则 `chromadb` 等含二进制扩展的包会因 ABI 不匹配而导入失败。
+> `一键启动量化系统.bat` 会优先使用 `.venv\Scripts\python.exe`，未检测到虚拟环境时回退到系统 `python` 并给出提示。
 
 ## 页面导航
 
@@ -493,6 +553,8 @@ data: {"type":"done","data":{}}
 
 ### 后端（Python · requirements.txt）
 
+> 以下依赖安装到项目根目录的 `.venv/` 虚拟环境中，不使用系统全局 Python。
+
 | 包 | 版本 | 用途 |
 | --- | --- | --- |
 | fastapi | >=0.100 | Web 框架，提供 REST API |
@@ -521,9 +583,11 @@ data: {"type":"done","data":{}}
 - 首次启动会联网拉取历史行情并缓存到本地 `_history_cache.json`，之后启动直接读缓存，无需重新联网。
 - 智能体对话记录保存在前端内存 store 中：切换页面不会丢失，刷新浏览器会重置，退出登录自动清空。
 - 向量知识库数据保存在后端 `quant-invest-server-py/kb_store/`（Chroma 本地持久化目录），重启服务不丢失，已加入 `.gitignore`；删除该目录即清空知识库，需重新上传文档建立索引。
+- 混合检索（`hybridserch.py`）使用的 BGE-m3 稠密模型权重保存在 `quant-invest-server-py/bgemodels/`（约 2.2GB），体积大不入库、已加入 `.gitignore`；换机器后需重新下载：先设置 `HF_ENDPOINT=https://hf-mirror.com` 与 `HF_HUB_DISABLE_XET=1`，再把 `BAAI/bge-m3` 拉取到该目录即可（加载时 `SentenceTransformer` 直接指向该路径，无需联网）。
 - 向量化默认走本地 Ollama（`qwen3-embedding:0.6b`），上传文档与检索时需保证 Ollama 在 `localhost:11434` 运行；Ollama 未启动时后台会提示「向量化服务调用失败」，知识库不可用但策略生成等其它功能不受影响。换用其它向量模型后必须清空 `kb_store/` 重建索引，不同模型的向量不可混用。
 - 后台账号复用 `users` 表，权限由单字段 `role` 表示（`0` 普通用户 / `1` 管理员 / `2` 超级管理员）：`role ≥ 1` 即可登录后台，可在「用户管理」中开关授予（仅超级管理员可操作）。超级管理员（`role=2`）全局唯一，由后端首次启动时按 `admin_config.py` 播种（默认 `admin / 123456`），不可删除、不可取消管理员身份。后台登录态与前台的 `quant_token` 完全独立。
 - 后台用户管理接口每次请求都会回库复核管理员身份，账号被删除或被取消权限后，其已签发的 token 立即失效（返回 401 并跳回登录页）。
 - `db_config.py`（数据库密码）与 `llm_config.py`（大模型 / 向量化模型 API Key）含敏感信息，已加入 `.gitignore`，请勿提交到版本库。
 - 后端默认监听 `127.0.0.1:3000`，前端通过环境变量 `VITE_API_BASE` 可覆盖其 API 地址（默认 `http://localhost:3000/api`）。
+- 后端依赖统一安装在项目根目录的 `.venv/` 虚拟环境（已 gitignore），与系统全局 Python 隔离；`一键启动量化系统.bat` 优先使用 `.venv\Scripts\python.exe`，未检测到虚拟环境时回退到系统 `python` 并给出提示。
 - 本平台仅供学习演示，不构成任何投资建议，股市有风险，投资需谨慎！
