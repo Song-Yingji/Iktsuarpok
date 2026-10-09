@@ -7,6 +7,7 @@ import { useAdminKb } from '../store/admin'
 import AdminUsers from '../components/admin/AdminUsers.vue'
 import AdminDocs from '../components/admin/AdminDocs.vue'
 import AdminSearch from '../components/admin/AdminSearch.vue'
+import AdminSettings from '../components/admin/AdminSettings.vue'
 
 const router = useRouter()
 const admin = JSON.parse(localStorage.getItem('admin_user') || '{}')
@@ -15,7 +16,8 @@ const { kbStats } = useAdminKb()
 const NAV = [
   { key: 'users', label: '用户管理', icon: 'account', title: '用户管理', desc: '查看全部用户，新增 / 编辑 / 删除账号，设置后台管理权限' },
   { key: 'docs', label: '向量知识库', icon: 'upload', title: '向量知识库', desc: '上传文档 → 递归分块 → 向量化 → 本地持久化' },
-  { key: 'search', label: '检索测试', icon: 'search', title: '检索测试', desc: '把问题向量化后在知识库中做相似度比对，预览召回片段' }
+  { key: 'search', label: '检索测试', icon: 'search', title: '检索测试', desc: '把问题向量化后在知识库中做相似度比对，预览召回片段' },
+  { key: 'settings', label: '模块设置', icon: 'sliders', title: '模块设置', desc: '调整模块化 RAG 检索管线的模块插拔与检索参数' }
 ]
 
 const active = ref('users')
@@ -84,7 +86,8 @@ function logout() {
 
         <AdminUsers v-if="active === 'users'" />
         <AdminDocs v-else-if="active === 'docs'" />
-        <AdminSearch v-else />
+        <AdminSearch v-else-if="active === 'search'" />
+        <AdminSettings v-else />
       </main>
     </div>
   </div>

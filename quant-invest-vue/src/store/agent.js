@@ -17,7 +17,7 @@ const typing = ref(false)
 // 当前展开检索浮层的消息下标。刻意放在 messages 之外：
 // 若挂到消息对象上，切换展开状态会触发 scrollDown 的深度侦听，把对话框拉到底部
 const ragOpenId = ref(null)
-let cancelStream = null  // 非响应式：中断流式请求
+let cancelStream = null  // 非响应式：中断请求
 
 function buildHistory() {
   // 策略消息转成摘要文本，避免空的 assistant 回复干扰模型
@@ -44,7 +44,7 @@ function send(text) {
   messages.value.push({ role: 'user', text: prompt })
 
   // push 进数组的是原对象，直接改原对象不会触发视图更新，
-  // 这里读回代理再写，保证流式文本、策略卡片与检索标记能实时渲染
+  // 这里读回代理再写，保证文本、策略卡片与检索标记能实时渲染
   messages.value.push({ role: 'bot', text: '', typing: true, strategy: null, saved: false, rag: null })
   const botMsg = messages.value[messages.value.length - 1]
 
@@ -122,7 +122,7 @@ const recStep = ref(-1)
 const watchedCodes = ref(new Set())
 const prefSets = ref([])
 const prefId = ref(null)
-let cancelRec = null   // 非响应式：中断流式请求
+let cancelRec = null   // 非响应式：中断请求
 let recTimer = null    // 非响应式：步骤进度定时器
 
 // 每次进入页面重新拉取偏好与自选，保证自选状态与偏好列表是最新的

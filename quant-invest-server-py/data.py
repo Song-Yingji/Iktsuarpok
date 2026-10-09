@@ -178,7 +178,6 @@ def get_market():
 
     stocks = []
     for s in STOCKS:
-        # 只用真实历史；无缓存视为「历史未就绪」，不生成模拟K线
         history = cached.get(s['code']) or []
         if history:
             last = history[-1]  # 最近一个已收盘交易日（昨收）
@@ -518,7 +517,6 @@ BACKTEST_FRAMEWORKS = [
 
 # ============ 投资偏好默认值 ============
 # 默认值需与前端 quant-invest-vue/src/lib/constants.js 的 DEFAULT_PREFS 保持一致，修改请同步两边
-# 注意：交易提醒已改为与偏好无关的全局设置（user_settings 表），不再属于偏好
 DEFAULT_PREFS = {
     'risk': '稳健型',
     'horizon': '中线（1-6个月）',

@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 import pymysql
 from fastapi import FastAPI, Body, Depends, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 import uvicorn
 
@@ -25,6 +25,7 @@ import admin_config
 import auth
 import db
 import llm
+import modular_rag
 import rag
 from data import (
     get_market, tick_market, get_news, news_error, refresh_news, get_news_categories,
@@ -129,11 +130,6 @@ def get_current_admin(authorization: str = Header(default=None)) -> dict:
     if not row or row['role'] < 1:
         raise HTTPException(status_code=401, detail='管理员权限已变更，请重新登录')
     return row
-
-
-def sse(event_type, data):
-    """把一条事件序列化成 SSE 帧。"""
-    return f'data: {json.dumps({"type": event_type, "data": data}, ensure_ascii=False)}\n\n'
 
 
 # ================= 技术指标 =================
@@ -670,64 +666,40 @@ def _parse_recommend(text, pool):
     return result[:6]
 
 
-def _stream_tagged(messages, system_prompt, start_tag, end_tag, parse, event_name):
-    """流式读取模型输出，把标记包裹的 JSON 解析为结构化事件（SSE 生成器）。
+def _split_tagged(text, start_tag, end_tag, parse):
+    """从完整回答中切分标记块，返回（说明文本, 解析结果）。
 
-    标记之外的文本按增量下发；标记之内的内容不下发原文，只在解析成功后以
-    event_name 事件发出。解析失败则整块降级为普通文本，保证前端不丢信息。
+    标记包裹的 JSON 交给 parse 解析；解析成功时返回标记之外的说明文本
+    （前缀 + 后缀），解析结果为结构化对象。未命中标记或解析失败时，整段
+    文本作为说明文本返回、解析结果为 None，保证前端不丢信息。
     """
-    pending = ''        # 待发文本缓冲，防止标记被 chunk 边界截断
-    in_block = False    # 是否处于标记包裹的 JSON 内部
-    buf = ''            # JSON 内容累积
-    tag_max_len = max(len(start_tag), len(end_tag))
-
-    for chunk in llm.chat_stream(messages, system_prompt=system_prompt):
-        if not in_block:
-            pending += chunk
-            if start_tag in pending:
-                # 标记之前的引导文字直接丢弃，不发给前端
-                pending = pending[pending.index(start_tag) + len(start_tag):]
-                in_block = True
-                buf = ''
-            elif len(pending) > tag_max_len:
-                emit, pending = pending[:-tag_max_len], pending[-tag_max_len:]
-                yield sse('text', emit)
-        else:
-            buf += chunk
-            if end_tag in buf:
-                idx = buf.index(end_tag)
-                body = buf[:idx].strip().strip('"\'\n\t ')
-                pending = buf[idx + len(end_tag):].lstrip('"\n\t \r\'')
-                in_block = False
-                buf = ''
-                parsed = parse(body)
-                if parsed is None:
-                    yield sse('text', start_tag + body + end_tag)
-                else:
-                    yield sse(event_name, parsed)
-
-    if in_block:
-        # 没等到结束标记，整块当普通文本发出
-        yield sse('text', start_tag + buf + pending)
-    elif pending:
-        yield sse('text', pending)
-    yield sse('done', {})
-
-
-RAG_TOP_K = 4  # 策略生成时从知识库召回的片段数
+    text = (text or '').strip()
+    if start_tag in text and end_tag in text:
+        s = text.index(start_tag) + len(start_tag)
+        e = text.index(end_tag, s)
+        body = text[s:e].strip().strip('"\'\n\t ')
+        parsed = parse(body)
+        if parsed is not None:
+            outer = (text[:s - len(start_tag)] + text[e + len(end_tag):]).strip().strip('"\n\t \r\'')
+            return outer, parsed
+    return text, None
 
 
 def _rag_context(query):
     """检索本地知识库，返回（拼接好的参考资料文本, 命中片段列表）。
 
+    走模块化 RAG 管线（查询改写→多路检索→RRF 融合→重排序→上下文压缩），
     知识库为空、未配置向量模型或检索失败时返回空串，静默降级为普通对话，
     保证 RAG 不可用不影响策略生成主流程。
     """
     if not (query or '').strip():
         return '', []
     try:
-        hits = rag.retrieve(query, top_k=RAG_TOP_K, serchtype=2)
+        hits = modular_rag.get_modular_rag().retrieve(query)
     except rag.RagError:
+        return '', []
+    except Exception as e:
+        print(f'[warn] 模块化 RAG 检索失败：{e}')
         return '', []
     if not hits:
         return '', []
@@ -741,7 +713,7 @@ def _rag_context(query):
 
 @app.post('/api/agent/generate-strategy')
 async def agent_generate_strategy(payload: dict = Body(default=None)):
-    """策略生成智能体（SSE 流式，带 RAG 检索增强）。
+    """策略生成智能体（非流式，带 RAG 检索增强）。
 
     请求体：
         messages: [{role: 'user'|'assistant', content: '...'}, ...]  多轮对话
@@ -751,11 +723,11 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
     原始问题拼成新的用户消息，再和 llm.SYSTEM_PROMPT 一起交给大模型。
     知识库为空或不可用时静默降级为普通对话，不影响原有功能。
 
-    响应（SSE）：
-        data: {"type":"rag","data":{"count":N,"sources":[...]}}\n\n  本轮命中的知识库来源
-        data: {"type":"text","data":"..."}\n\n
-        data: {"type":"strategy","data":{...}}\n\n
-        data: {"type":"done","data":{}}\n\n
+    响应（JSON）：
+        { rag: {count, sources}, text, strategy }
+        rag      本轮命中的知识库来源
+        text     除策略 JSON 之外的说明文本
+        strategy 解析出的策略对象（未生成时为 null）
     """
     p = payload or {}
     messages = p.get('messages')
@@ -763,22 +735,25 @@ async def agent_generate_strategy(payload: dict = Body(default=None)):
         # 兼容旧格式：单条 prompt
         messages = [{'role': 'user', 'content': p.get('prompt') or ''}]
 
-    def gen():
-        msgs = [dict(m) for m in messages]
-        hits = []
-        if msgs and msgs[-1].get('role') == 'user':
-            context, hits = _rag_context(msgs[-1].get('content') or '')
-            if context:
-                msgs[-1]['content'] = f'{context}\n\n## 我的问题\n{msgs[-1]["content"]}'
+    msgs = [dict(m) for m in messages]
+    hits = []
+    if msgs and msgs[-1].get('role') == 'user':
+        context, hits = _rag_context(msgs[-1].get('content') or '')
+        if context:
+            msgs[-1]['content'] = f'{context}\n\n## 我的问题\n{msgs[-1]["content"]}'
 
-        yield sse('rag', {
+    answer = llm.chat(msgs, system_prompt=llm.SYSTEM_PROMPT)
+    if not answer.strip():
+        answer = '系统繁忙，请稍后重试'
+    text, strategy = _split_tagged(answer, llm.STRATEGY_START, llm.STRATEGY_END, _parse_strategy)
+    return {
+        'rag': {
             'count': len(hits),
             'sources': [{'docName': h['docName'], 'score': round(h['score'], 3)} for h in hits],
-        })
-        yield from _stream_tagged(msgs, llm.SYSTEM_PROMPT, llm.STRATEGY_START, llm.STRATEGY_END,
-                                  _parse_strategy, 'strategy')
-
-    return StreamingResponse(gen(), media_type='text/event-stream')
+        },
+        'text': text,
+        'strategy': strategy,
+    }
 
 
 def _load_prefs(uid, pref_id=None):
@@ -795,7 +770,7 @@ def _load_prefs(uid, pref_id=None):
 
 @app.post('/api/agent/recommend')
 async def agent_recommend(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
-    """自动荐股智能体（SSE 流式）。
+    """自动荐股智能体（非流式）。
 
     先用真实行情快照构造候选池并推导技术因子，再交给大模型给出评分与理由。
     模型只输出主观字段（score/confidence/action/reasons），名称、板块、价格、
@@ -804,10 +779,10 @@ async def agent_recommend(payload: dict = Body(default=None), uid: int = Depends
     请求体：{ prefsId } —— 指定使用哪一套已保存偏好；缺省用默认偏好，
             用户一套偏好都没有时退化为内置默认值（全市场候选池）。
 
-    响应（SSE）：
-        data: {"type":"text","data":"..."}\n\n          分析说明（流式）
-        data: {"type":"recommend","data":[{...}]}\n\n  荐股结果（已回填真实行情）
-        data: {"type":"done","data":{}}\n\n
+    响应（JSON）：
+        { text, recommend }
+        text      分析说明
+        recommend 荐股结果列表（已回填真实行情，失败时为 null）
     """
     payload = payload or {}
     prefs = _load_prefs(uid, payload.get('prefsId'))
@@ -835,12 +810,12 @@ async def agent_recommend(payload: dict = Body(default=None), uid: int = Depends
 
 请先输出一两句简短的分析说明，然后按约定格式输出荐股 JSON。'''
 
-    return StreamingResponse(
-        _stream_tagged([{'role': 'user', 'content': user_msg}], llm.RECOMMEND_SYSTEM_PROMPT,
-                       llm.RECOMMEND_START, llm.RECOMMEND_END,
-                       lambda body: _parse_recommend(body, pool), 'recommend'),
-        media_type='text/event-stream',
-    )
+    answer = llm.chat([{'role': 'user', 'content': user_msg}], system_prompt=llm.RECOMMEND_SYSTEM_PROMPT)
+    if not answer.strip():
+        answer = '系统繁忙，请稍后重试'
+    text, recommend = _split_tagged(answer, llm.RECOMMEND_START, llm.RECOMMEND_END,
+                                    lambda body: _parse_recommend(body, pool))
+    return {'text': text, 'recommend': recommend}
 
 
 # ================= 后台管理（知识库） =================
@@ -935,6 +910,22 @@ async def admin_search(payload: dict = Body(default=None), _: str = Depends(get_
         return rag.retrieve(query, top_k=top_k)
     except rag.RagError as e:
         return fail(400, str(e))
+
+
+@app.get('/api/admin/rag-config')
+async def admin_get_rag_config(_: str = Depends(get_current_admin)):
+    """模块化 RAG 配置：当前各模块开关与检索参数。"""
+    return modular_rag.load_config()
+
+
+@app.put('/api/admin/rag-config')
+async def admin_save_rag_config(payload: dict = Body(default=None),
+                                _: str = Depends(get_current_admin)):
+    """保存模块化 RAG 配置（模块开关 / 融合方式 / 召回参数），策略生成检索时即时生效。"""
+    try:
+        return modular_rag.save_config(payload or {})
+    except OSError as e:
+        return fail(500, f'配置写入失败：{e}')
 
 
 # ================= 后台管理（用户管理） =================

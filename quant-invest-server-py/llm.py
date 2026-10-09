@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""大模型接入层：封装 OpenAI 兼容 API 流式调用。
+"""大模型接入层：封装 OpenAI 兼容 API 非流式调用。
 切换模型只需修改下方三个配置变量即可。
 """
-import json
 import requests
 
 # ====== 模型配置（从 llm_config.py 读取） ======
@@ -10,7 +9,7 @@ from llm_config import API_BASE_URL, API_KEY, MODEL_NAME
 
 # ====== 系统提示词 ======
 # 策略 JSON 必须用 ===STRATEGY_JSON=== 和 ===END_STRATEGY=== 包裹，
-# 以便后端流式解析时精确提取，避免与普通文本混淆。
+# 以便后端解析时精确提取，避免与普通文本混淆。
 SYSTEM_PROMPT = '''你是 Quant Buffett，一位专业的量化投资策略助手，擅长用通俗的语言解释量化交易知识，并能根据用户需求生成可回测的量化策略。
 
 ## 回复规则
@@ -148,48 +147,30 @@ RECOMMEND_START = '===RECOMMEND_JSON==='
 RECOMMEND_END = '===END_RECOMMEND==='
 
 
-def chat_stream(messages, system_prompt=None):
-    """调用 OpenAI 兼容 API 流式接口，逐 chunk 生成内容。
+def chat(messages, system_prompt=None, temperature=0.3):
+    """调用 OpenAI 兼容 API（非流式），一次性返回完整回答文本。
 
-    Args:
-        messages: list of dict，如 [{'role': 'user', 'content': '你好'}]
-        system_prompt: 自定义系统提示词，缺省用策略生成的 SYSTEM_PROMPT
-
-    Yields:
-        str: 模型输出的增量文本
+    system_prompt 传空或 None 时不注入系统消息（分析类提示词自带指令）。
+    失败时返回空串，由调用方按保守策略兜底。
     """
     url = f'{API_BASE_URL}/chat/completions'
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {API_KEY}',
     }
+    msgs = [{'role': 'system', 'content': system_prompt}] + messages if system_prompt else messages
     payload = {
         'model': MODEL_NAME,
-        'messages': [{'role': 'system', 'content': system_prompt or SYSTEM_PROMPT}] + messages,
-        'stream': True,
-        'temperature': 0.3,
+        'messages': msgs,
+        'stream': False,
+        'temperature': temperature,
         'top_p': 0.9,
     }
-
-    with requests.post(url, json=payload, headers=headers, stream=True, timeout=120) as resp:
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=120)
         resp.raise_for_status()
-        # 强制 UTF-8 解码（text/event-stream 默认 ISO-8859-1 会导致中文乱码）
-        resp.encoding = 'utf-8'
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line or not line.startswith('data: '):
-                continue
-            data_str = line[6:]
-            if data_str.strip() == '[DONE]':
-                break
-            try:
-                data = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
-            choices = data.get('choices', [])
-            if not choices:
-                continue
-            delta = choices[0].get('delta', {})
-            # 只取 content，过滤掉 reasoning_content（模型思考过程）
-            content = delta.get('content')
-            if content:
-                yield content
+        data = resp.json()
+        return (data.get('choices') or [{}])[0].get('message', {}).get('content') or ''
+    except Exception as e:
+        print(f'[warn] 大模型非流式调用失败：{e}')
+        return ''

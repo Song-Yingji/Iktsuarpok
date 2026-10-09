@@ -19,7 +19,6 @@ import tempfile
 import time
 import uuid
 import zipfile
-from hybridserch import HybirdRetrival
 import requests
 
 try:
@@ -308,53 +307,44 @@ def delete_document(doc_id):
     return True
 
 
-def retrieve(query, top_k=TOP_K, min_score=MIN_SCORE, serchtype=1):
-    if serchtype == 1:
-        """把问题向量化后与知识库比对，返回相似度达标的片段（高到低）。"""
-        query = (query or '').strip()
-        if not query:
-            return []
-        col = _collection()
-        total = col.count()
-        if not total:
-            return []
+def all_chunks():
+    """返回知识库全部文本分块及其元数据，供模块化 RAG 的 BM25 / 重排序等模块建索引。"""
+    col = _collection()
+    res = col.get(include=['documents', 'metadatas'])
+    docs = res.get('documents') or []
+    metas = res.get('metadatas') or []
+    return list(zip(docs, metas))
 
-        res = col.query(
-            query_embeddings=_embed([query]),
-            n_results=min(top_k, total),
-            include=['documents', 'metadatas', 'distances'],
-        )
-        hits = []
-        for text, meta, dist in zip(res['documents'][0], res['metadatas'][0], res['distances'][0]):
-            # 余弦空间下 distance = 1 - 相似度
-            score = 1.0 - float(dist)
-            if score < min_score:
-                continue
-            hits.append({
-                'text': text,
-                'docId': meta.get('doc_id'),
-                'docName': meta.get('doc_name'),
-                'chunkIndex': meta.get('chunk_index'),
-                'score': score,
-            })
-        return hits
-    
-    elif serchtype == 2:
-        col = _collection()
-        total = col.count()
-        res = col.get(include=["documents"])
-        hr = HybirdRetrival(K=60, documents=res["documents"], query=query, top_k=top_k)
-        results = hr.get_rrf()
-        hits = []
-        for idx,doc in enumerate(results):
-            hits.append({
-                'text': doc,
-                'docId': "",
-                'docName': "向量知识库",
-                'chunkIndex': "",
-                'score': top_k / (idx+1),
-            })
-        return hits
+
+def retrieve(query, top_k=TOP_K, min_score=MIN_SCORE):
+    """把问题向量化后与知识库比对，返回相似度达标的片段（高到低）。"""
+    query = (query or '').strip()
+    if not query:
+        return []
+    col = _collection()
+    total = col.count()
+    if not total:
+        return []
+
+    res = col.query(
+        query_embeddings=_embed([query]),
+        n_results=min(top_k, total),
+        include=['documents', 'metadatas', 'distances'],
+    )
+    hits = []
+    for text, meta, dist in zip(res['documents'][0], res['metadatas'][0], res['distances'][0]):
+        # 余弦空间下 distance = 1 - 相似度
+        score = 1.0 - float(dist)
+        if score < min_score:
+            continue
+        hits.append({
+            'text': text,
+            'docId': meta.get('doc_id'),
+            'docName': meta.get('doc_name'),
+            'chunkIndex': meta.get('chunk_index'),
+            'score': score,
+        })
+    return hits
 
 
 def stats():

@@ -105,105 +105,89 @@ export const settingsApi = {
 
 // ---------------- 智能体 ----------------
 /**
- * 打开一个 SSE 流并按事件分发（策略生成、智能荐股共用）
+ * 非流式请求：一次性拿到完整结果，返回取消函数（AbortController）
  * @param {string} path - 相对 BASE_URL 的接口路径
  * @param {Object} body - 请求体
- * @param {Object} handlers - { onEvent(evt), onError(err) }
+ * @param {Object} handlers - { onData(data), onError(err) }
  * @returns {Function} 取消函数
  */
-function openStream(path, body, { onEvent, onError } = {}) {
+function postOnce(path, body, { onData, onError } = {}) {
   const token = localStorage.getItem('quant_token')
   const controller = new AbortController()
 
-  fetch(BASE_URL + path, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: 'Bearer ' + token } : {})
-    },
-    body: JSON.stringify(body),
-    signal: controller.signal
-  }).then(async (res) => {
+  ;(async () => {
+    let res
+    try {
+      res = await fetch(BASE_URL + path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: 'Bearer ' + token } : {})
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+    } catch (e) {
+      if (e.name === 'AbortError') return
+      onError?.(new Error('无法连接后端服务，请确认服务已启动'))
+      return
+    }
+    const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       if (res.status === 401) {
         localStorage.removeItem('quant_token')
         localStorage.removeItem('quant_user')
         location.href = '/login'
       }
-      throw new Error(`请求失败 (${res.status})`)
+      onError?.(new Error(data.message || `请求失败 (${res.status})`))
+      return
     }
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
-
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      // SSE 以 \n\n 分隔事件
-      let idx
-      while ((idx = buffer.indexOf('\n\n')) !== -1) {
-        const raw = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-        if (!raw.startsWith('data: ')) continue
-        const jsonStr = raw.slice(6)
-        if (!jsonStr.trim()) continue
-        try {
-          onEvent?.(JSON.parse(jsonStr))
-        } catch (e) {
-          // 忽略解析失败的行
-        }
-      }
-    }
-  }).catch((e) => {
-    if (e.name === 'AbortError') return
-    onError?.(e)
-  })
+    onData?.(data)
+  })()
 
   return () => controller.abort()
 }
 
 export const agentApi = {
   /**
-   * 策略生成智能体（SSE 流式对话）
+   * 策略生成智能体（非流式对话）
    * @param {Array} messages - 对话历史 [{role: 'user'|'assistant', content: '...'}, ...]
-   * @param {Object} h - 事件回调
-   * @param {Function} h.onText - 文本增量 (text) => void
-   * @param {Function} h.onRag - 知识库检索命中条数 ({count, sources}) => void
+   * @param {Object} h - 结果回调
+   * @param {Function} h.onText - 说明文本 (text) => void
+   * @param {Function} h.onRag - 知识库检索命中 ({count, sources}) => void
    * @param {Function} h.onStrategy - 策略生成 (strategy) => void
    * @param {Function} h.onDone - 结束 () => void
    * @param {Function} h.onError - 错误 (err) => void
    * @returns {Function} 取消函数
    */
   chatStream(messages, h = {}) {
-    return openStream('/agent/generate-strategy', { messages }, {
-      onEvent(evt) {
-        if (evt.type === 'rag') h.onRag?.(evt.data)
-        else if (evt.type === 'text') h.onText?.(evt.data)
-        else if (evt.type === 'strategy') h.onStrategy?.(evt.data)
-        else if (evt.type === 'done') h.onDone?.()
+    return postOnce('/agent/generate-strategy', { messages }, {
+      onData(data) {
+        if (data.rag?.count) h.onRag?.(data.rag)
+        if (data.text) h.onText?.(data.text)
+        if (data.strategy) h.onStrategy?.(data.strategy)
+        h.onDone?.()
       },
       onError: (e) => h.onError?.(e)
     })
   },
 
   /**
-   * 自动荐股智能体（SSE 流式分析）
+   * 自动荐股智能体（非流式分析）
    * @param {number|null} prefsId - 使用的偏好集 id，缺省后端用默认偏好
-   * @param {Object} h - 事件回调
-   * @param {Function} h.onText - 分析说明增量 (text) => void
+   * @param {Object} h - 结果回调
+   * @param {Function} h.onText - 分析说明 (text) => void
    * @param {Function} h.onRecommend - 荐股结果 (list) => void
    * @param {Function} h.onDone - 结束 () => void
    * @param {Function} h.onError - 错误 (err) => void
    * @returns {Function} 取消函数
    */
   recommendStream(prefsId, h = {}) {
-    return openStream('/agent/recommend', { prefsId: prefsId || null }, {
-      onEvent(evt) {
-        if (evt.type === 'text') h.onText?.(evt.data)
-        else if (evt.type === 'recommend') h.onRecommend?.(evt.data)
-        else if (evt.type === 'done') h.onDone?.()
+    return postOnce('/agent/recommend', { prefsId: prefsId || null }, {
+      onData(data) {
+        if (data.text) h.onText?.(data.text)
+        if (data.recommend && data.recommend.length) h.onRecommend?.(data.recommend)
+        h.onDone?.()
       },
       onError: (e) => h.onError?.(e)
     })
@@ -247,5 +231,8 @@ export const adminApi = {
   users: () => request('/admin/users', { scope: 'admin' }),
   createUser: (payload) => request('/admin/users', { method: 'POST', body: payload, scope: 'admin' }),
   updateUser: (id, payload) => request('/admin/users/' + id, { method: 'PUT', body: payload, scope: 'admin' }),
-  removeUser: (id) => request('/admin/users/' + id, { method: 'DELETE', scope: 'admin' })
+  removeUser: (id) => request('/admin/users/' + id, { method: 'DELETE', scope: 'admin' }),
+
+  ragConfig: () => request('/admin/rag-config', { scope: 'admin' }),
+  saveRagConfig: (payload) => request('/admin/rag-config', { method: 'PUT', body: payload, scope: 'admin' })
 }
