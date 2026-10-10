@@ -225,6 +225,29 @@ def build_dataset(num_questions: int = 10, regenerate: bool = False,
             'fingerprint': fingerprint, 'size': len(examples)}
 
 
+def dataset_status() -> Dict:
+    """只读当前评测集缓存状态（不合成、不评测）。
+
+    前端进入「效果测评」时调用，用于判断「题目数量 > 已缓存题目数 ⇒ 必须重新合成」。
+    返回 {'exists', 'size', 'judgeModel'}。
+    """
+    nodes, *_ = _build_chunk_index()
+    status: Dict[str, Any] = {'exists': False, 'size': 0, 'judgeModel': ''}
+    if not nodes:
+        return status
+    fingerprint = _kb_fingerprint(nodes)
+    try:
+        with open(DATASET_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get('fingerprint') == fingerprint:
+            status['exists'] = True
+            status['size'] = len(data.get('examples') or [])
+            status['judgeModel'] = data.get('judgeModel', '')
+    except (OSError, ValueError):
+        pass
+    return status
+
+
 # ================= 检索结果 → LlamaIndex Retriever =================
 class _CachedRetriever(BaseRetriever):
     """把 ModularRAG 一次检索的最终片段缓存为 LlamaIndex Retriever。

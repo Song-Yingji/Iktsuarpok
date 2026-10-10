@@ -46,7 +46,7 @@ EMBED_BASE_URL = _cfg('EMBED_BASE_URL', 'http://localhost:11434/v1').rstrip('/')
 EMBED_API_KEY = _cfg('EMBED_API_KEY', 'ollama')   # Ollama 不校验 Key，占位即可
 EMBED_MODEL = _cfg('EMBED_MODEL', 'qwen3-embedding:0.6b')
 EMBED_BATCH = 10          # 单次请求的文本条数，控制请求体量与显存占用
-EMBED_DIM = 1024          # qwen3-embedding:0.6b 输出 1024 维向量
+EMBED_DIM = int(_cfg('EMBED_DIM', 1024))  # 向量维度，默认 qwen3-embedding:0.6b 为 1024 维
 
 # ====== 分块参数 ======
 CHUNK_SIZE = 500          # 每块目标字符数

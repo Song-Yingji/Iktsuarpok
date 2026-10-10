@@ -235,5 +235,6 @@ export const adminApi = {
 
   ragConfig: () => request('/admin/rag-config', { scope: 'admin' }),
   saveRagConfig: (payload) => request('/admin/rag-config', { method: 'PUT', body: payload, scope: 'admin' }),
+  ragEvalDataset: () => request('/admin/rag-eval/dataset', { scope: 'admin' }),
   ragEval: (payload) => request('/admin/rag-eval', { method: 'POST', body: payload, scope: 'admin' })
 }

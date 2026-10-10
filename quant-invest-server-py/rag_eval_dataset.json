@@ -1,8 +1,8 @@
 {
   "fingerprint": "3a4ae79d86e8b6e1085ecc952d151857",
   "genVersion": "zh-v1",
-  "numQuestions": 10,
-  "createdAt": "2026-10-10 11:14:49",
+  "numQuestions": 20,
+  "createdAt": "2026-10-10 15:08:51",
   "judgeModel": "qwen3:0.6b",
   "examples": [
     {

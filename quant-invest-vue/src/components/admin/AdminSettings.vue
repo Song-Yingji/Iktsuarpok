@@ -1,10 +1,12 @@
 <script>
-// 模块级缓存：组件卸载/切换页面不丢失，刷新浏览器后清空
-let evalResultCache = null
+import { reactive } from 'vue'
+
+// 模块级共享状态：测评的加载态/错误/结果跨页面切换不丢失（刷新浏览器后清空）
+const evalState = reactive({ loading: false, error: '', result: null })
 </script>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, toRefs, onMounted } from 'vue'
 import { adminApi } from '../../api'
 import { useApp } from '../../store/app'
 import { Card, Button, Toggle, Slider } from '../ui'
@@ -85,10 +87,15 @@ async function reset() {
 }
 
 // ================= 效果测评（LlamaIndex） =================
-const evalLoading = ref(false)
-const evalError = ref('')
-const evalResult = ref(evalResultCache) // 从模块级缓存恢复，刷新页面后清空
+const { loading: evalLoading, error: evalError, result: evalResult } = toRefs(evalState)
 const evalForm = reactive({ numQuestions: 10, regenerate: false })
+const datasetStatus = ref({ exists: false, size: 0, loaded: false })
+
+// 题目数量超过已缓存题目数时，必须重新合成（无法复用缓存）
+const needRegen = computed(() => {
+  const cached = Number(datasetStatus.value.size) || 0
+  return cached > 0 && Number(evalForm.numQuestions) > cached
+})
 
 const METRIC_CARDS = [
   { key: 'context_precision', label: '上下文精确率', en: 'Context Precision', desc: '拼入回答的检索片段中，命中标准来源的比例' },
@@ -100,20 +107,32 @@ const METRIC_CARDS = [
 
 const EVAL_COUNTS = [5, 10, 15, 20]
 
-async function runEval() {
-  evalLoading.value = true
-  evalError.value = ''
+async function refreshDatasetStatus() {
   try {
-    evalResult.value = await adminApi.ragEval({
+    const s = await adminApi.ragEvalDataset()
+    datasetStatus.value = { ...s, loaded: true }
+  } catch (e) {
+    datasetStatus.value = { exists: false, size: 0, loaded: true }
+  }
+}
+
+async function runEval() {
+  evalState.loading = true
+  evalState.error = ''
+  try {
+    const res = await adminApi.ragEval({
       numQuestions: Number(evalForm.numQuestions) || 10,
-      regenerate: !!evalForm.regenerate
+      regenerate: !!evalForm.regenerate || needRegen.value
     })
-    evalResultCache = evalResult.value
+    evalState.result = res
+    if (res.dataset && typeof res.dataset.size === 'number') {
+      datasetStatus.value = { exists: true, size: res.dataset.size, loaded: true }
+    }
     evalForm.regenerate = false
   } catch (e) {
-    evalError.value = e.message
+    evalState.error = e.message
   } finally {
-    evalLoading.value = false
+    evalState.loading = false
   }
 }
 
@@ -126,7 +145,14 @@ function snippet(text) {
   return t.length > 60 ? t.slice(0, 60) + '…' : t
 }
 
-onMounted(load)
+function noteText(d) {
+  return (d.errors || []).join('；') || '—'
+}
+
+onMounted(() => {
+  load()
+  refreshDatasetStatus()
+})
 </script>
 
 <template>
@@ -213,7 +239,8 @@ onMounted(load)
         </span>
         <span class="eval-params-item">
           <span class="eval-params-key">重新生成题目</span>
-          <Toggle :checked="evalForm.regenerate" @change="(v) => (evalForm.regenerate = v)" />
+          <Toggle :checked="evalForm.regenerate || needRegen" :disabled="needRegen" @change="(v) => (evalForm.regenerate = v)" />
+          <span v-if="needRegen" class="eval-regen-hint">题目数超过缓存（{{ datasetStatus.size }} 题），将重新合成</span>
         </span>
       </div>
 
@@ -266,7 +293,7 @@ onMounted(load)
                   {{ fmtMetric(d.answerCorrectness) }}
                   <span v-if="d.answerCorrectnessRaw != null" class="metric-raw">({{ d.answerCorrectnessRaw }}/5)</span>
                 </td>
-                <td class="cell-note">{{ (d.errors || []).join('；') || '—' }}</td>
+                <td class="cell-note" :title="noteText(d)">{{ snippet(noteText(d)) }}</td>
               </tr>
             </tbody>
           </table>
@@ -315,11 +342,12 @@ onMounted(load)
 .eval-params-label { color: var(--text-2); font-weight: 600; }
 .eval-params-item { display: flex; align-items: center; gap: 8px; }
 .eval-params-key { color: var(--text-3); }
+.eval-regen-hint { color: var(--warn, #e6a23c); font-size: 11.5px; }
 .eval-select { width: auto; min-width: 60px; padding: 5px 10px; font-size: 12.5px; }
 .eval-divider { border-top: 1px dashed rgba(32, 44, 71, 0.7); }
 .eval-body { padding: 16px; }
 .metric-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: grid; grid-template-columns: repeat(5, 1fr);
   gap: 12px; margin: 16px 0 12px;
 }
 .metric-card {
@@ -328,9 +356,9 @@ onMounted(load)
   background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-light);
 }
 .metric-head {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
 }
-.metric-head strong { font-size: 12.5px; font-weight: 600; }
+.metric-head strong { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .metric-en { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
 .metric-value {
   font-size: 22px; font-weight: 700; margin-top: 8px;
@@ -357,10 +385,14 @@ onMounted(load)
 .eval-table .cell-snippet {
   max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.eval-table .cell-note { color: var(--text-3); max-width: 200px; }
+.eval-table .cell-note {
+  color: var(--text-3); max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .metric-raw { color: var(--text-3); font-size: 11px; margin-left: 4px; }
 
 @media (max-width: 900px) {
   .settings-grid { grid-template-columns: 1fr; }
+  .metric-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 }
 </style>

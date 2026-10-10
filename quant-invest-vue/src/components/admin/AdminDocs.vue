@@ -120,7 +120,7 @@ onMounted(refresh)
       尚未配置向量化模型 API Key，请在后端 llm_config.py 中填写 EMBED_API_KEY 后重启服务，否则无法建立索引与检索。
     </div>
 
-    <div class="grid grid-3">
+    <div class="grid grid-2">
       <Card title="知识库概览">
         <div class="kv-list">
           <div class="kv-row"><span class="k">已入库文档</span><span>{{ stats ? stats.docs : '--' }}</span></div>
@@ -131,12 +131,6 @@ onMounted(refresh)
         <div class="kv-list">
           <div class="kv-row"><span class="k">向量模型</span><span>{{ stats?.model || '--' }}</span></div>
           <div class="kv-row"><span class="k">向量维度</span><span>{{ stats?.dim || '--' }}</span></div>
-        </div>
-      </Card>
-      <Card title="模型配置">
-        <div class="kv-list">
-          <div class="kv-row"><span class="k">召回条数</span><span>{{ stats?.topK ?? '--' }}</span></div>
-          <div class="kv-row"><span class="k">相似度下限</span><span>{{ stats?.minScore ?? '--' }}</span></div>
         </div>
       </Card>
     </div>

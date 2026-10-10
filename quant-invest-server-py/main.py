@@ -929,6 +929,16 @@ async def admin_save_rag_config(payload: dict = Body(default=None),
         return fail(500, f'配置写入失败：{e}')
 
 
+@app.get('/api/admin/rag-eval/dataset')
+def admin_rag_eval_dataset(_: str = Depends(get_current_admin)):
+    """效果测评：只读当前评测集缓存状态（题目数量联动、是否需重新合成）。"""
+    try:
+        return rag_eval.dataset_status()
+    except Exception as e:
+        print(f'[warn] 读取评测集状态失败：{e}')
+        return fail(500, f'读取评测集状态失败：{e}')
+
+
 @app.post('/api/admin/rag-eval')
 def admin_rag_eval(payload: dict = Body(default=None), _: str = Depends(get_current_admin)):
     """效果测评（LlamaIndex）：对当前模块化 RAG 配置跑五项指标。
