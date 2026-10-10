@@ -5,7 +5,6 @@
 运行：python main.py  （默认端口 3000）
 """
 import asyncio
-import hmac
 import json
 import os
 import re

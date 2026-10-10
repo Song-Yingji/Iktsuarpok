@@ -159,7 +159,7 @@ onMounted(() => {
   <div class="settings-wrap">
     <div v-if="error" class="admin-alert">{{ error }}</div>
 
-    <div class="page-head section-head">
+    <div class="page-head">
       <div>
         <h1>模块设置</h1>
         <p>调整模块化 RAG 检索管线的模块插拔与检索参数</p>
@@ -218,13 +218,13 @@ onMounted(() => {
       </Card>
     </div>
 
-    <div class="page-head section-head eval-head">
+    <div class="page-head eval-head">
       <div>
         <h1>效果测评</h1>
         <p>测评集由 LlamaIndex RagDatasetGenerator 从知识库自动合成（问题 + 标准答案 + 来源片段）。</p>
       </div>
       <div class="page-actions">
-        <Button class="eval-run" :loading="evalLoading" @click="runEval">开始测评</Button>
+        <Button :loading="evalLoading" @click="runEval">开始测评</Button>
       </div>
     </div>
 
@@ -248,57 +248,57 @@ onMounted(() => {
 
       <div class="eval-body">
         <div v-if="evalError" class="admin-alert">{{ evalError }}</div>
-      <template v-if="evalResult">
-        <div class="metric-grid">
-          <div v-for="m in METRIC_CARDS" :key="m.key" class="metric-card">
-            <div class="metric-head">
-              <strong>{{ m.label }}</strong>
-              <span class="metric-en">{{ m.en }}</span>
+        <template v-if="evalResult">
+          <div class="metric-grid">
+            <div v-for="m in METRIC_CARDS" :key="m.key" class="metric-card">
+              <div class="metric-head">
+                <strong>{{ m.label }}</strong>
+                <span class="metric-en">{{ m.en }}</span>
+              </div>
+              <div class="metric-value">{{ fmtMetric(evalResult.metrics[m.key]) }}</div>
+              <p class="metric-desc">{{ m.desc }}</p>
             </div>
-            <div class="metric-value">{{ fmtMetric(evalResult.metrics[m.key]) }}</div>
-            <p class="metric-desc">{{ m.desc }}</p>
           </div>
-        </div>
 
-        <div class="eval-meta">
-          <span>评测集：{{ evalResult.dataset.used }} 题（{{ evalResult.dataset.regenerated ? '本次合成' : '复用缓存' }}）</span>
-          <span>耗时：{{ evalResult.elapsedSeconds }} 秒</span>
-        </div>
+          <div class="eval-meta">
+            <span>评测集：{{ evalResult.dataset.used }} 题（{{ evalResult.dataset.regenerated ? '本次合成' : '复用缓存' }}）</span>
+            <span>耗时：{{ evalResult.elapsedSeconds }} 秒</span>
+          </div>
 
-        <div class="eval-table-wrap">
-          <table class="eval-table">
-            <thead>
-              <tr>
-                <th>问题</th>
-                <th>回答摘要</th>
-                <th>检索片段</th>
-                <th>精确率</th>
-                <th>召回率</th>
-                <th>忠实度</th>
-                <th>相关性</th>
-                <th>正确率</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(d, i) in evalResult.details" :key="i">
-                <td class="cell-snippet" :title="d.query">{{ d.query }}</td>
-                <td class="cell-snippet" :title="d.answer">{{ snippet(d.answer) }}</td>
-                <td>{{ (d.contexts || []).length }} 条</td>
-                <td>{{ fmtMetric(d.contextPrecision) }}</td>
-                <td>{{ fmtMetric(d.contextRecall) }}</td>
-                <td>{{ fmtMetric(d.faithfulness) }}</td>
-                <td>{{ fmtMetric(d.answerRelevance) }}</td>
-                <td>
-                  {{ fmtMetric(d.answerCorrectness) }}
-                  <span v-if="d.answerCorrectnessRaw != null" class="metric-raw">({{ d.answerCorrectnessRaw }}/5)</span>
-                </td>
-                <td class="cell-note" :title="noteText(d)">{{ snippet(noteText(d)) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
+          <div class="eval-table-wrap">
+            <table class="eval-table">
+              <thead>
+                <tr>
+                  <th>问题</th>
+                  <th>回答摘要</th>
+                  <th>检索片段</th>
+                  <th>精确率</th>
+                  <th>召回率</th>
+                  <th>忠实度</th>
+                  <th>相关性</th>
+                  <th>正确率</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(d, i) in evalResult.details" :key="i">
+                  <td class="cell-snippet" :title="d.query">{{ d.query }}</td>
+                  <td class="cell-snippet" :title="d.answer">{{ snippet(d.answer) }}</td>
+                  <td>{{ (d.contexts || []).length }} 条</td>
+                  <td>{{ fmtMetric(d.contextPrecision) }}</td>
+                  <td>{{ fmtMetric(d.contextRecall) }}</td>
+                  <td>{{ fmtMetric(d.faithfulness) }}</td>
+                  <td>{{ fmtMetric(d.answerRelevance) }}</td>
+                  <td>
+                    {{ fmtMetric(d.answerCorrectness) }}
+                    <span v-if="d.answerCorrectnessRaw != null" class="metric-raw">({{ d.answerCorrectnessRaw }}/5)</span>
+                  </td>
+                  <td class="cell-note" :title="noteText(d)">{{ snippet(noteText(d)) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
       </div>
     </Card>
   </div>

@@ -27,9 +27,11 @@ quant-invest-server-py/kb_store/
 # 模块化 RAG 配置（后台「模块设置」运行时生成，勿提交）
 quant-invest-server-py/rag_config.json
 
+# 效果测评评测集缓存（后台「效果测评」运行时生成，勿提交）
+quant-invest-server-py/rag_eval_dataset.json
+
 # ===== Node / Vite =====
 node_modules/
-dist/
 .vite/
 *.local
 .eslintcache
