@@ -369,7 +369,10 @@ class SelfRagModule:
 
     @classmethod
     def _ask(cls, prompt: str) -> str:
-        return llm.chat([{'role': 'user', 'content': prompt}], system_prompt=cls.SYSTEM).strip()
+        # 判定类调用固定 temperature=0：YES/NO 决策需稳定可复现，
+        # 避免同一问题在多次调用间随机翻转（会随机丢弃检索结果）。
+        return llm.chat([{'role': 'user', 'content': prompt}],
+                        system_prompt=cls.SYSTEM, temperature=0).strip()
 
     @staticmethod
     def _yes(text: str, default: bool) -> bool:

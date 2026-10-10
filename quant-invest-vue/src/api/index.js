@@ -234,5 +234,6 @@ export const adminApi = {
   removeUser: (id) => request('/admin/users/' + id, { method: 'DELETE', scope: 'admin' }),
 
   ragConfig: () => request('/admin/rag-config', { scope: 'admin' }),
-  saveRagConfig: (payload) => request('/admin/rag-config', { method: 'PUT', body: payload, scope: 'admin' })
+  saveRagConfig: (payload) => request('/admin/rag-config', { method: 'PUT', body: payload, scope: 'admin' }),
+  ragEval: (payload) => request('/admin/rag-eval', { method: 'POST', body: payload, scope: 'admin' })
 }

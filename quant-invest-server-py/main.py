@@ -27,6 +27,7 @@ import db
 import llm
 import modular_rag
 import rag
+import rag_eval
 from data import (
     get_market, tick_market, get_news, news_error, refresh_news, get_news_categories,
     BACKTEST_FRAMEWORKS,
@@ -926,6 +927,29 @@ async def admin_save_rag_config(payload: dict = Body(default=None),
         return modular_rag.save_config(payload or {})
     except OSError as e:
         return fail(500, f'配置写入失败：{e}')
+
+
+@app.post('/api/admin/rag-eval')
+def admin_rag_eval(payload: dict = Body(default=None), _: str = Depends(get_current_admin)):
+    """效果测评（LlamaIndex）：对当前模块化 RAG 配置跑五项指标。
+
+    评测集由 LlamaIndex RagDatasetGenerator 从知识库合成（缓存复用），
+    每题跑一遍完整管线后用 LlamaIndex 评估器打分：
+    上下文精确率 / 上下文召回率 / 忠实度 / 答案相关性 / 答案正确率。
+
+    请求体：{ numQuestions: 1~20（默认 10）, regenerate: 是否重建评测集 }
+    评测耗时较长（每题需多次大模型调用），前端同步等待即可。
+    """
+    p = payload or {}
+    num = _clamp_int(p.get('numQuestions'), 1, 20, 10)
+    try:
+        return rag_eval.run_evaluation(num_questions=num,
+                                       regenerate_dataset=bool(p.get('regenerate')))
+    except rag.RagError as e:
+        return fail(400, str(e))
+    except Exception as e:
+        print(f'[warn] RAG 效果测评失败：{e}')
+        return fail(500, f'评测失败：{e}')
 
 
 # ================= 后台管理（用户管理） =================

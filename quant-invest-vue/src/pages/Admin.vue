@@ -1,9 +1,10 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Badge, Button } from '../components/ui'
+import { Badge, Button, ToastContainer } from '../components/ui'
 import Icon from '../components/Icon.vue'
 import { useAdminKb } from '../store/admin'
+import { useApp } from '../store/app'
 import AdminUsers from '../components/admin/AdminUsers.vue'
 import AdminDocs from '../components/admin/AdminDocs.vue'
 import AdminSearch from '../components/admin/AdminSearch.vue'
@@ -12,6 +13,7 @@ import AdminSettings from '../components/admin/AdminSettings.vue'
 const router = useRouter()
 const admin = JSON.parse(localStorage.getItem('admin_user') || '{}')
 const { kbStats } = useAdminKb()
+const { toasts } = useApp()
 
 const NAV = [
   { key: 'users', label: '用户管理', icon: 'account', title: '用户管理', desc: '查看全部用户，新增 / 编辑 / 删除账号，设置后台管理权限' },
@@ -37,6 +39,7 @@ function logout() {
 
 <template>
   <div class="admin-page">
+    <ToastContainer :toasts="toasts" />
     <header class="admin-topbar">
       <div class="admin-topbar-inner">
         <div class="admin-brand">
@@ -75,7 +78,7 @@ function logout() {
       </aside>
 
       <main class="admin-content">
-        <div class="page-head">
+        <div v-if="active !== 'settings'" class="page-head">
           <div>
             <h1>{{ current.title }}</h1>
             <p>

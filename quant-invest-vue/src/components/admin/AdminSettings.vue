@@ -1,7 +1,15 @@
+<script>
+// 模块级缓存：组件卸载/切换页面不丢失，刷新浏览器后清空
+let evalResultCache = null
+</script>
+
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { adminApi } from '../../api'
+import { useApp } from '../../store/app'
 import { Card, Button, Toggle, Slider } from '../ui'
+
+const { toast } = useApp()
 
 // 与后端 modular_rag.DEFAULT_CONFIG 保持一致，供「恢复默认」使用
 const DEFAULTS = {
@@ -17,11 +25,11 @@ const DEFAULTS = {
 }
 
 const MODULES = [
-  { key: 'enable_rewrite', label: '查询改写', desc: '规则式多查询（疑问句变体 + 关键词扩展），提升召回率' },
-  { key: 'enable_fusion', label: '多路融合', desc: '向量检索 + BM25 关键词检索，经 RRF 倒数排序融合' },
+  { key: 'enable_rewrite', label: '查询改写', desc: '规则式多查询（疑问句变体 + 关键词扩展）' },
+  { key: 'enable_fusion', label: '多路融合', desc: '向量检索 + BM25 关键词检索，进行排序融合' },
   { key: 'enable_rerank', label: '重排序', desc: '按分词重叠与短语匹配，对检索结果重新打分排序' },
   { key: 'enable_compression', label: '上下文压缩', desc: '分句打分，仅保留与问题最相关的句子，精简上下文' },
-  { key: 'enable_self_rag', label: '本地大模型分析（Self-RAG）', desc: '调用本地大模型判定是否需要检索、检索内容是否有用，过滤无效上下文' }
+  { key: 'enable_self_rag', label: '本地大模型分析（Self-RAG）', desc: '判定是否需要检索、检索内容是否有用' }
 ]
 
 const FUSION_METHODS = [
@@ -38,7 +46,6 @@ const REWRITE_METHODS = [
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
-const saved = ref(false)
 
 const form = reactive({ ...DEFAULTS })
 
@@ -57,7 +64,6 @@ async function load() {
 async function save() {
   saving.value = true
   error.value = ''
-  saved.value = false
   try {
     const cfg = await adminApi.saveRagConfig({
       ...form,
@@ -65,7 +71,7 @@ async function save() {
       min_score: Number(form.min_score) || 0
     })
     Object.assign(form, cfg)
-    saved.value = true
+    toast('已保存配置')
   } catch (e) {
     error.value = e.message
   } finally {
@@ -78,13 +84,65 @@ async function reset() {
   await save()
 }
 
+// ================= 效果测评（LlamaIndex） =================
+const evalLoading = ref(false)
+const evalError = ref('')
+const evalResult = ref(evalResultCache) // 从模块级缓存恢复，刷新页面后清空
+const evalForm = reactive({ numQuestions: 10, regenerate: false })
+
+const METRIC_CARDS = [
+  { key: 'context_precision', label: '上下文精确率', en: 'Context Precision', desc: '拼入回答的检索片段中，命中标准来源的比例' },
+  { key: 'context_recall', label: '上下文召回率', en: 'Context Recall', desc: '标准来源片段被检索到的比例' },
+  { key: 'faithfulness', label: '忠实度', en: 'Faithfulness', desc: '回答内容有检索依据、无幻觉的比例' },
+  { key: 'answer_relevance', label: '答案相关性', en: 'Answer Relevance', desc: '回答与问题的相关程度' },
+  { key: 'answer_correctness', label: '答案正确率', en: 'Answer Correctness', desc: '对照标准答案 1–5 评分，归一化到 0–1' }
+]
+
+const EVAL_COUNTS = [5, 10, 15, 20]
+
+async function runEval() {
+  evalLoading.value = true
+  evalError.value = ''
+  try {
+    evalResult.value = await adminApi.ragEval({
+      numQuestions: Number(evalForm.numQuestions) || 10,
+      regenerate: !!evalForm.regenerate
+    })
+    evalResultCache = evalResult.value
+    evalForm.regenerate = false
+  } catch (e) {
+    evalError.value = e.message
+  } finally {
+    evalLoading.value = false
+  }
+}
+
+function fmtMetric(v) {
+  return v === null || v === undefined ? '—' : Number(v).toFixed(2)
+}
+
+function snippet(text) {
+  const t = (text || '').replace(/\s+/g, ' ').trim()
+  return t.length > 60 ? t.slice(0, 60) + '…' : t
+}
+
 onMounted(load)
 </script>
 
 <template>
   <div class="settings-wrap">
     <div v-if="error" class="admin-alert">{{ error }}</div>
-    <div v-else-if="saved" class="admin-success">已保存，策略生成智能体的检索将立即按新配置生效</div>
+
+    <div class="page-head section-head">
+      <div>
+        <h1>模块设置</h1>
+        <p>调整模块化 RAG 检索管线的模块插拔与检索参数</p>
+      </div>
+      <div class="page-actions">
+        <Button variant="ghost" :disabled="loading || saving" @click="reset">恢复默认</Button>
+        <Button :loading="saving" :disabled="loading" @click="save">保存配置</Button>
+      </div>
+    </div>
 
     <div class="settings-grid">
       <Card title="模块开关" bodyClass="flush">
@@ -134,18 +192,100 @@ onMounted(load)
       </Card>
     </div>
 
-    <div class="settings-actions">
-      <Button variant="ghost" :disabled="loading || saving" @click="reset">恢复默认</Button>
-      <Button :loading="saving" :disabled="loading" @click="save">保存配置</Button>
+    <div class="page-head section-head eval-head">
+      <div>
+        <h1>效果测评</h1>
+        <p>测评集由 LlamaIndex RagDatasetGenerator 从知识库自动合成（问题 + 标准答案 + 来源片段）。</p>
+      </div>
+      <div class="page-actions">
+        <Button class="eval-run" :loading="evalLoading" @click="runEval">开始测评</Button>
+      </div>
     </div>
+
+    <Card class="eval-bubble" bodyClass="flush">
+      <div class="eval-params">
+        <span class="eval-params-label">测评参数：</span>
+        <span class="eval-params-item">
+          <span class="eval-params-key">题目数量</span>
+          <select class="select eval-select" v-model="evalForm.numQuestions">
+            <option v-for="n in EVAL_COUNTS" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </span>
+        <span class="eval-params-item">
+          <span class="eval-params-key">重新生成题目</span>
+          <Toggle :checked="evalForm.regenerate" @change="(v) => (evalForm.regenerate = v)" />
+        </span>
+      </div>
+
+      <div class="eval-divider"></div>
+
+      <div class="eval-body">
+        <div v-if="evalError" class="admin-alert">{{ evalError }}</div>
+      <template v-if="evalResult">
+        <div class="metric-grid">
+          <div v-for="m in METRIC_CARDS" :key="m.key" class="metric-card">
+            <div class="metric-head">
+              <strong>{{ m.label }}</strong>
+              <span class="metric-en">{{ m.en }}</span>
+            </div>
+            <div class="metric-value">{{ fmtMetric(evalResult.metrics[m.key]) }}</div>
+            <p class="metric-desc">{{ m.desc }}</p>
+          </div>
+        </div>
+
+        <div class="eval-meta">
+          <span>评测集：{{ evalResult.dataset.used }} 题（{{ evalResult.dataset.regenerated ? '本次合成' : '复用缓存' }}）</span>
+          <span>耗时：{{ evalResult.elapsedSeconds }} 秒</span>
+        </div>
+
+        <div class="eval-table-wrap">
+          <table class="eval-table">
+            <thead>
+              <tr>
+                <th>问题</th>
+                <th>回答摘要</th>
+                <th>检索片段</th>
+                <th>精确率</th>
+                <th>召回率</th>
+                <th>忠实度</th>
+                <th>相关性</th>
+                <th>正确率</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(d, i) in evalResult.details" :key="i">
+                <td class="cell-snippet" :title="d.query">{{ d.query }}</td>
+                <td class="cell-snippet" :title="d.answer">{{ snippet(d.answer) }}</td>
+                <td>{{ (d.contexts || []).length }} 条</td>
+                <td>{{ fmtMetric(d.contextPrecision) }}</td>
+                <td>{{ fmtMetric(d.contextRecall) }}</td>
+                <td>{{ fmtMetric(d.faithfulness) }}</td>
+                <td>{{ fmtMetric(d.answerRelevance) }}</td>
+                <td>
+                  {{ fmtMetric(d.answerCorrectness) }}
+                  <span v-if="d.answerCorrectnessRaw != null" class="metric-raw">({{ d.answerCorrectnessRaw }}/5)</span>
+                </td>
+                <td class="cell-note">{{ (d.errors || []).join('；') || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+      </div>
+    </Card>
   </div>
 </template>
 
 <style scoped>
 .settings-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch;
 }
-.module-list, .param-list { padding: 12px 16px; }
+.settings-grid .card {
+  height: 100%; display: flex; flex-direction: column;
+}
+.settings-grid :deep(.card-body) { flex: 1; display: flex; flex-direction: column; }
+.module-list, .param-list { padding: 12px 16px; flex: 1; }
 .module-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 14px; padding: 12px 0;
@@ -166,15 +306,59 @@ onMounted(load)
 
 .loading-state { padding: 24px 16px; color: var(--text-3); font-size: 12.5px; }
 
-.settings-actions {
-  display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;
+/* ---- 同级标题区块 ---- */
+.eval-head { margin-top: 30px; }
+.eval-params {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 8px; padding: 12px 16px; font-size: 12.5px;
 }
-
-.admin-success {
-  padding: 10px 14px; border-radius: 9px; margin-bottom: 16px;
-  background: rgba(14, 203, 129, 0.1); border: 1px solid rgba(14, 203, 129, 0.35);
-  color: var(--down); font-size: 12.5px;
+.eval-params-label { color: var(--text-2); font-weight: 600; }
+.eval-params-item { display: flex; align-items: center; gap: 8px; }
+.eval-params-key { color: var(--text-3); }
+.eval-select { width: auto; min-width: 60px; padding: 5px 10px; font-size: 12.5px; }
+.eval-divider { border-top: 1px dashed rgba(32, 44, 71, 0.7); }
+.eval-body { padding: 16px; }
+.metric-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px; margin: 16px 0 12px;
 }
+.metric-card {
+  display: flex; flex-direction: column;
+  padding: 14px 16px; border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-light);
+}
+.metric-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.metric-head strong { font-size: 12.5px; font-weight: 600; }
+.metric-en { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+.metric-value {
+  font-size: 22px; font-weight: 700; margin-top: 8px;
+  font-variant-numeric: tabular-nums; letter-spacing: 0.2px;
+}
+.metric-desc {
+  font-size: 11px; color: var(--text-3); line-height: 1.6; margin-top: auto; padding-top: 6px;
+}
+.eval-meta {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-3); margin: 4px 0 12px;
+}
+.eval-table-wrap { overflow-x: auto; border: 1px solid var(--border-light); border-radius: 11px; }
+.eval-table { width: 100%; border-collapse: collapse; font-size: 12px; min-width: 860px; }
+.eval-table th {
+  text-align: left; font-weight: 600; font-size: 11.5px; color: var(--text-3);
+  padding: 9px 12px; border-bottom: 1px solid var(--border-light); white-space: nowrap;
+}
+.eval-table td {
+  padding: 9px 12px; border-bottom: 1px solid var(--border-light);
+  font-variant-numeric: tabular-nums;
+}
+.eval-table tr:last-child td { border-bottom: none; }
+.eval-table .cell-snippet {
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.eval-table .cell-note { color: var(--text-3); max-width: 200px; }
+.metric-raw { color: var(--text-3); font-size: 11px; margin-left: 4px; }
 
 @media (max-width: 900px) {
   .settings-grid { grid-template-columns: 1fr; }
