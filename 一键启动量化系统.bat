@@ -36,9 +36,11 @@ if not exist "%VENV_PY%" (
 )
 
 rem ---- 定位 Node（优先使用指定路径，找不到再回退 PATH） ----
-set "NODE_EXE="
+set "NODE_EXE=%~dp0..\..\nodejs\node.exe"
+for %%i in ("%NODE_EXE%") do set "NODE_EXE=%%~fi"
+if not exist "%NODE_EXE%" set "NODE_EXE="
 if not defined NODE_EXE (
-    where node >nul 2>&1 && set "NODE_EXE=node"
+    for /f "delims=" %%i in ('where node 2^>nul') do if not defined NODE_EXE set "NODE_EXE=%%i"
 )
 if not defined NODE_EXE (
     echo [错误] 未找到 Node.js，请先安装 Node.js。
