@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""LlamaIndex 评测服务（纯 LlamaIndex 评估器，不自研指标）。
+"""LlamaIndex 评测服务（评测集 LlamaIndex 合成，生成侧 LlamaIndex 评估器打分）。
 
 测评集：用 LlamaIndex `RagDatasetGenerator` 从本地知识库合成问答对
 （问题 + 标准答案 + 来源片段），并持久化缓存，知识库变更后自动重建。
 
-指标映射（方案二）：
-    上下文精确率 Context Precision -> RetrieverEvaluator precision
-    上下文召回率 Context Recall     -> RetrieverEvaluator recall
+指标映射（标准口径）：
+    上下文精确率 Context Precision -> 标准 AP 口径：Σ(Precision@k × v_k) / Top-K 内相关块数（仅精确命中来源分块算相关）
+    上下文召回率 Context Recall     -> 来源分块被精确命中的比例
     忠实度 Faithfulness             -> FaithfulnessEvaluator
     答案相关性 Answer Relevance     -> RelevancyEvaluator
     答案正确率 Answer Correctness   -> CorrectnessEvaluator（官方 1-5 分，汇总归一到 0-1）
@@ -31,12 +31,10 @@ from llama_index.core.evaluation import (
     CorrectnessEvaluator,
     FaithfulnessEvaluator,
     RelevancyEvaluator,
-    RetrieverEvaluator,
 )
 from llama_index.core.llama_dataset.generator import RagDatasetGenerator
 from llama_index.core.llms.custom import CustomLLM
-from llama_index.core.retrievers import BaseRetriever
-from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+from llama_index.core.schema import TextNode
 
 # 评测集缓存文件（与后端同目录）
 DATASET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rag_eval_dataset.json')
@@ -248,22 +246,6 @@ def dataset_status() -> Dict:
     return status
 
 
-# ================= 检索结果 → LlamaIndex Retriever =================
-class _CachedRetriever(BaseRetriever):
-    """把 ModularRAG 一次检索的最终片段缓存为 LlamaIndex Retriever。
-
-    RetrieverEvaluator 只读取 node_id 与文本，因此直接回放缓存，
-    避免为打分重复跑一遍检索管线造成前后结果不一致。
-    """
-
-    def __init__(self, nodes: List[NodeWithScore]):
-        super().__init__()
-        self._nodes = nodes
-
-    def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
-        return list(self._nodes)
-
-
 def _resolve_node_ids(docs: List[Any], by_text: Dict[str, str],
                       by_meta: Dict[tuple, str], by_position: Dict[int, str]) -> List[str]:
     """把管线输出的片段解析成知识库分块 ID（多种检索路径的元信息语义不同，逐级回退）。"""
@@ -300,9 +282,6 @@ def _evaluate_one(query: str, expected_ids: List[str], docs: List[Any], answer: 
     """对一题的管线输出做整体评价：检索侧 + 生成侧共 5 项指标（每项独立容错）。"""
     contexts = [d.content for d in docs]
     retrieved_ids = _resolve_node_ids(docs, by_text, by_meta, by_position)
-    nodes = [NodeWithScore(node=TextNode(id_=rid or f'unknown-{i}', text=d.content),
-                           score=float(d.score or 0.0))
-             for i, (d, rid) in enumerate(zip(docs, retrieved_ids))]
 
     detail: Dict[str, Any] = {
         'query': query,
@@ -317,7 +296,8 @@ def _evaluate_one(query: str, expected_ids: List[str], docs: List[Any], answer: 
     }
 
     # 检索侧：上下文精确率 / 上下文召回率（+ 命中率、MRR 作诊断参考）
-    if expected_ids and not nodes:
+    # 命中判定：仅精确命中标准来源分块才算相关
+    if expected_ids and not retrieved_ids:
         # 管线整体返回空（如自反思判定不检索）：检索指标按 0 计入均值，而非留空
         detail['contextPrecision'] = 0.0
         detail['contextRecall'] = 0.0
@@ -325,17 +305,23 @@ def _evaluate_one(query: str, expected_ids: List[str], docs: List[Any], answer: 
         detail['mrr'] = 0.0
         detail['errors'].append('管线未返回检索结果，检索指标按 0 计')
     elif expected_ids:
-        try:
-            ret_evaluator = RetrieverEvaluator.from_metric_names(
-                ['hit_rate', 'mrr', 'precision', 'recall'], retriever=_CachedRetriever(nodes))
-            result = ret_evaluator.evaluate(query, expected_ids)
-            md = result.metric_dict
-            detail['contextPrecision'] = float(md.get('precision', 0.0))
-            detail['contextRecall'] = float(md.get('recall', 0.0))
-            detail['hitRate'] = float(md.get('hit_rate', 0.0))
-            detail['mrr'] = float(md.get('mrr', 0.0))
-        except Exception as e:
-            detail['errors'].append(f'检索评估失败：{e}')
+        expected = {g for g in expected_ids if g}
+        retrieved_set = set(retrieved_ids)
+        first_hit = None
+        hit_count = 0          # Top-K 内相关块总数（v_k=1 的个数）
+        ap_sum = 0.0           # Σ(Precision@k × v_k)
+        for k, cid in enumerate(retrieved_ids, start=1):
+            if cid and cid in expected:
+                hit_count += 1
+                ap_sum += hit_count / k      # 相关块命中时累加 Precision@k
+                if first_hit is None:
+                    first_hit = k - 1
+        covered = sum(1 for g in expected_ids if g and g in retrieved_set)
+        # 标准 AP 口径：Σ(Precision@k × v_k) / Top-K 内相关块数
+        detail['contextPrecision'] = ap_sum / hit_count if hit_count else 0.0
+        detail['contextRecall'] = covered / len(expected_ids)
+        detail['hitRate'] = 1.0 if hit_count else 0.0
+        detail['mrr'] = 1.0 / (first_hit + 1) if first_hit is not None else 0.0
     else:
         detail['errors'].append('缺少来源分块标注，跳过上下文精确率/召回率')
 

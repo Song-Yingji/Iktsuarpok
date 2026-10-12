@@ -49,8 +49,8 @@ EMBED_BATCH = 10          # 单次请求的文本条数，控制请求体量与�
 EMBED_DIM = int(_cfg('EMBED_DIM', 1024))  # 向量维度，默认 qwen3-embedding:0.6b 为 1024 维
 
 # ====== 分块参数 ======
-CHUNK_SIZE = 500          # 每块目标字符数
-CHUNK_OVERLAP = 80        # 相邻块重叠字符数，避免跨块语义被切断
+CHUNK_SIZE = 1000          # 每块目标字符数
+CHUNK_OVERLAP = 150        # 相邻块重叠字符数，避免跨块语义被切断
 
 # ====== 检索参数 ======
 TOP_K = 4                 # 默认召回条数

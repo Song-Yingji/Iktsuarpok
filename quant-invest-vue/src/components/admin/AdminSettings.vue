@@ -27,8 +27,8 @@ const DEFAULTS = {
 }
 
 const MODULES = [
-  { key: 'enable_rewrite', label: '查询改写', desc: '规则式多查询（疑问句变体 + 关键词扩展）' },
-  { key: 'enable_fusion', label: '多路融合', desc: '向量检索 + BM25 关键词检索，进行排序融合' },
+  { key: 'enable_rewrite', label: '查询改写', desc: '规则式多查询（可选择改写方式）' },
+  { key: 'enable_fusion', label: '多路融合', desc: '向量 + BM25 关键词，进行融合（可选择融合方式）' },
   { key: 'enable_rerank', label: '重排序', desc: '按分词重叠与短语匹配，对检索结果重新打分排序' },
   { key: 'enable_compression', label: '上下文压缩', desc: '分句打分，仅保留与问题最相关的句子，精简上下文' },
   { key: 'enable_self_rag', label: '本地大模型分析（Self-RAG）', desc: '判定是否需要检索、检索内容是否有用' }
@@ -74,8 +74,10 @@ async function save() {
     })
     Object.assign(form, cfg)
     toast('已保存配置')
+    return true
   } catch (e) {
     error.value = e.message
+    return false
   } finally {
     saving.value = false
   }
@@ -98,11 +100,11 @@ const needRegen = computed(() => {
 })
 
 const METRIC_CARDS = [
-  { key: 'context_precision', label: '上下文精确率', en: 'Context Precision', desc: '拼入回答的检索片段中，命中标准来源的比例' },
-  { key: 'context_recall', label: '上下文召回率', en: 'Context Recall', desc: '标准来源片段被检索到的比例' },
-  { key: 'faithfulness', label: '忠实度', en: 'Faithfulness', desc: '回答内容有检索依据、无幻觉的比例' },
-  { key: 'answer_relevance', label: '答案相关性', en: 'Answer Relevance', desc: '回答与问题的相关程度' },
-  { key: 'answer_correctness', label: '答案正确率', en: 'Answer Correctness', desc: '对照标准答案 1–5 评分，归一化到 0–1' }
+  { key: 'context_precision', label: '上下文精确率', en: 'Context Precision', desc: '标准 AP 公式\n按排名加权的平均精确率' },
+  { key: 'context_recall', label: '上下文召回率', en: 'Context Recall', desc: '精确命中比例\n命中块数 ÷ 标准块总数' },
+  { key: 'faithfulness', label: '忠实度', en: 'Faithfulness', desc: '陈述级归因\n计算支持的陈述数 ÷ 总陈述数' },
+  { key: 'answer_relevance', label: '答案相关性', en: 'Answer Relevance', desc: 'LLM二值判断\n回答是否切题（是=1、否=0）' },
+  { key: 'answer_correctness', label: '答案正确率', en: 'Answer Correctness', desc: 'rubric打分\n打1–5分，归一化到0–1区间' }
 ]
 
 const EVAL_COUNTS = [5, 10, 15, 20]
@@ -117,6 +119,9 @@ async function refreshDatasetStatus() {
 }
 
 async function runEval() {
+  // 先自动保存上方配置，确保测评按当前配置执行（保存失败则中止测评，绝不用旧配置先跑）
+  const saved = await save()
+  if (!saved) return
   evalState.loading = true
   evalState.error = ''
   try {
@@ -193,15 +198,15 @@ onMounted(() => {
         <div v-if="loading" class="loading-state">加载中…</div>
         <div v-else class="param-list">
           <div class="field">
-            <label class="field-label">融合方式 fusion_method</label>
-            <select class="select" v-model="form.fusion_method">
-              <option v-for="o in FUSION_METHODS" :key="o.value" :value="o.value">{{ o.label }}</option>
-            </select>
-          </div>
-          <div class="field">
             <label class="field-label">改写方式 rewrite_method</label>
             <select class="select" v-model="form.rewrite_method">
               <option v-for="o in REWRITE_METHODS" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">融合方式 fusion_method</label>
+            <select class="select" v-model="form.fusion_method">
+              <option v-for="o in FUSION_METHODS" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
           </div>
           <div class="field">
@@ -365,7 +370,7 @@ onMounted(() => {
   font-variant-numeric: tabular-nums; letter-spacing: 0.2px;
 }
 .metric-desc {
-  font-size: 11px; color: var(--text-3); line-height: 1.6; margin-top: auto; padding-top: 6px;
+  font-size: 11px; color: var(--text-3); line-height: 1.6; margin-top: auto; padding-top: 6px; white-space: pre-line;
 }
 .eval-meta {
   display: flex; gap: 18px; flex-wrap: wrap;
