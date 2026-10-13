@@ -1,85 +1,82 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { accountApi, strategyApi, settingsApi } from '../api'
+import { accountApi } from '../api'
 import { fmt } from '../lib/utils'
-import { Card, StatCard, Button, Badge, Toggle, Modal, Field } from '../components/ui'
+import { StatCard, Button, Badge, Modal, Field } from '../components/ui'
 import Icon from '../components/Icon.vue'
 import { useApp } from '../store/app'
 
 const { toast } = useApp()
 
-const STATUS = {
-  active: { label: '运行中', tone: 'up' },
-  connected: { label: '已连接', tone: 'info' },
-  disconnected: { label: '未连接', tone: 'neutral' }
+const CONNECT = {
+  untested: { label: '未测试', tone: 'neutral' },
+  ok: { label: '连通', tone: 'down' },
+  fail: { label: '连接失败', tone: 'up' }
 }
 
 const accounts = ref([])
-const strategies = ref([])
 const loading = ref(false)
-const savingId = ref(null)
-
-// 交易提醒：与投资偏好无关的独立开关，不参与荐股提示词
-const settings = ref({ tradeNotify: true })
+const testingId = ref(null)
 
 const showCreate = ref(false)
 const creating = ref(false)
-const form = ref({ broker: '', type: '模拟盘', capital: 100000, accountNo: '' })
+const form = ref({ name: '', type: '模拟盘', platformUrl: '', loginAccount: '', password: '' })
+
+// 更新登录凭证弹窗（密码留空表示不修改）
+const showCred = ref(false)
+const credSaving = ref(false)
+const credTarget = ref(null)
+const credForm = ref({ loginAccount: '', password: '' })
 
 const totalAssets = computed(() => accounts.value.reduce((a, x) => a + x.totalAssets, 0))
-const autoCount = computed(() => accounts.value.filter((x) => x.autoTrade).length)
 
 async function load() {
   loading.value = true
-  const [accs, savedStrategies] = await Promise.all([accountApi.list(), strategyApi.saved()])
-  accounts.value = accs
-  strategies.value = savedStrategies
+  accounts.value = await accountApi.list()
   loading.value = false
 }
 
-async function loadSettings() {
+async function testConnection(acc) {
+  testingId.value = acc.id
   try {
-    settings.value = await settingsApi.get()
-  } catch (e) {
-    // 拉取失败保持默认值，不阻断账户页其余内容
-  }
-}
-
-async function onTradeNotify(checked) {
-  try {
-    await settingsApi.save({ tradeNotify: checked })
-    settings.value = { ...settings.value, tradeNotify: checked }
-  } catch (e) {
-    toast(e.message, 'error')
-  }
-}
-
-async function patch(acc, changes) {
-  savingId.value = acc.id
-  try {
-    const updated = await accountApi.update(acc.id, changes)
-    const i = accounts.value.findIndex((x) => x.id === acc.id)
-    if (i >= 0) accounts.value[i] = updated
-    toast('账户已更新')
+    const res = await accountApi.testConnection(acc.id)
+    acc.connectStatus = res.connectStatus
+    acc.lastChecked = res.lastChecked
+    if (typeof res.totalAssets === 'number') acc.totalAssets = res.totalAssets
+    if (typeof res.cash === 'number') acc.cash = res.cash
+    toast(res.message, res.connectStatus === 'ok' ? 'success' : 'error')
   } catch (e) {
     toast(e.message, 'error')
   } finally {
-    savingId.value = null
+    testingId.value = null
   }
 }
 
-function onStrategy(acc, e) {
-  const strategyId = e.target.value || null
-  const changes = strategyId ? { strategyId } : { strategyId: null, autoTrade: false }
-  patch(acc, changes)
+function openCred(acc) {
+  credTarget.value = acc
+  credForm.value = { loginAccount: acc.loginAccount || '', password: '' }
+  showCred.value = true
 }
 
-function onAuto(acc, checked) {
-  patch(acc, { autoTrade: checked })
+async function saveCred() {
+  credSaving.value = true
+  try {
+    const patchBody = { loginAccount: credForm.value.loginAccount }
+    if (credForm.value.password) patchBody.password = credForm.value.password
+    const updated = await accountApi.update(credTarget.value.id, patchBody)
+    const i = accounts.value.findIndex((x) => x.id === credTarget.value.id)
+    if (i >= 0) accounts.value[i] = updated
+    showCred.value = false
+    toast('凭证已更新')
+  } catch (e) {
+    toast(e.message, 'error')
+  } finally {
+    credSaving.value = false
+  }
 }
 
 async function unbind(acc) {
-  if (!window.confirm(`确定解绑账户「${acc.broker}」吗？解绑后将从账户列表移除。`)) return
+  if (!window.confirm(`确定解绑账户「${acc.name}」吗？解绑后将从账户列表移除，保存的登录凭证一并删除。`)) return
   try {
     await accountApi.remove(acc.id)
     accounts.value = accounts.value.filter((x) => x.id !== acc.id)
@@ -90,13 +87,13 @@ async function unbind(acc) {
 }
 
 async function createAccount() {
-  if (!form.value.broker.trim()) return toast('请填写券商/账户名称', 'error')
+  if (!form.value.name.trim()) return toast('请填写账户显示名称', 'error')
   creating.value = true
   try {
     const acc = await accountApi.create({ ...form.value })
     accounts.value.push(acc)
     showCreate.value = false
-    form.value = { broker: '', type: '模拟盘', capital: 100000, accountNo: '' }
+    form.value = { name: '', type: '模拟盘', platformUrl: '', loginAccount: '', password: '' }
     toast('账户创建成功')
   } finally {
     creating.value = false
@@ -105,7 +102,6 @@ async function createAccount() {
 
 onMounted(() => {
   load()
-  loadSettings()
 })
 </script>
 
@@ -114,7 +110,7 @@ onMounted(() => {
     <div class="page-head">
       <div>
         <h1>账户管理</h1>
-        <p>统一管理多个交易账户，为每个账户绑定量化策略并开关自动交易</p>
+        <p>连接和管理多个交易账户，连接成功后自动读取账户资金</p>
       </div>
       <div class="page-actions">
         <Button icon="plus" @click="showCreate = true">添加账户</Button>
@@ -122,22 +118,10 @@ onMounted(() => {
     </div>
 
     <!-- 概览 -->
-    <div class="grid grid-3">
+    <div class="grid grid-2">
       <StatCard icon="wallet" label="账户总数" :value="accounts.length" sub="实时同步的账户数量" />
       <StatCard icon="account" label="总资产" :value="fmt.money(totalAssets)" sub="全部账户资产合计" />
-      <StatCard icon="bolt" label="自动交易" :value="autoCount" :sub="`${accounts.length} 个账户中已开启`" :tone="autoCount > 0 ? 'up' : ''" />
     </div>
-
-    <!-- 交易提醒： -->
-    <Card class="mt-16">
-      <div class="account-row">
-        <div style="display:flex;flex-direction:column;gap:3px">
-          <span>交易提醒</span>
-          <small style="color:var(--text-3);font-size:11.5px">产生交易信号或成交时推送通知</small>
-        </div>
-        <Toggle :checked="settings.tradeNotify" @change="onTradeNotify" />
-      </div>
-    </Card>
 
     <!-- 账户卡列表 -->
     <div v-if="loading" style="text-align:center;padding:40px;color:var(--text-3)">账户加载中…</div>
@@ -149,14 +133,14 @@ onMounted(() => {
       <div v-for="acc in accounts" :key="acc.id" class="account-card">
         <div class="account-top">
           <div class="account-broker">
-            <span class="broker-icon">{{ acc.broker.slice(0, 1) }}</span>
+            <span class="broker-icon">{{ acc.name.slice(0, 1) }}</span>
             <div>
-              <strong>{{ acc.broker }}</strong>
-              <small>{{ acc.type }} · {{ acc.accountNo }}</small>
+              <strong>{{ acc.name }}</strong>
+              <small>{{ acc.type }}<template v-if="acc.loginAccount"> · {{ acc.loginAccount }}</template></small>
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
-            <Badge :tone="STATUS[acc.status]?.tone || 'neutral'" dot>{{ STATUS[acc.status]?.label || acc.status }}</Badge>
+            <Badge :tone="CONNECT[acc.connectStatus]?.tone || 'neutral'" dot>{{ CONNECT[acc.connectStatus]?.label || acc.connectStatus }}</Badge>
             <button type="button" class="icon-btn" title="解绑账户" @click="unbind(acc)">
               <Icon name="close" :size="15" />
             </button>
@@ -175,60 +159,73 @@ onMounted(() => {
         </div>
 
         <div class="account-row">
-          <span class="r-label">量化策略</span>
-          <select
-            class="select" style="width: 168px"
-            :value="acc.strategyId || ''"
-            :disabled="savingId === acc.id"
-            @change="onStrategy(acc, $event)"
-          >
-            <option value="">暂不绑定</option>
-            <option v-for="s in strategies" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
+          <span class="r-label">账户链接</span>
+          <a
+            v-if="acc.platformUrl"
+            :href="acc.platformUrl"
+            target="_blank"
+            rel="noopener"
+            style="color:var(--accent-2);font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            :title="acc.platformUrl"
+          >{{ acc.platformUrl }}</a>
+          <span v-else style="color:var(--text-3)">未填写</span>
         </div>
 
         <div class="account-row">
-          <span class="r-label">自动交易</span>
-          <Toggle :checked="acc.autoTrade" @change="(v) => onAuto(acc, v)" />
+          <span class="r-label">账户连接</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <Button variant="ghost" :loading="testingId === acc.id" @click="testConnection(acc)">测试连接</Button>
+            <Button variant="ghost" @click="openCred(acc)">更新凭证</Button>
+          </div>
         </div>
 
         <div class="account-row">
           <span class="r-label">创建时间</span>
-          <span style="color: var(--text-3)">{{ acc.created }}</span>
-        </div>
-
-        <div v-if="acc.autoTrade && acc.strategyId" style="font-size:11.5px;color:var(--accent-2)">
-          自动交易已开启 · 当前策略 {{ strategies.find((s) => s.id === acc.strategyId)?.name }}
-        </div>
-        <div v-else-if="acc.autoTrade" style="font-size:11.5px;color:var(--warn)">
-          提示：开启自动交易需先绑定量化策略
+          <span style="color: var(--text-3)">{{ acc.created }}<template v-if="acc.lastChecked"> · 上次检测 {{ acc.lastChecked }}</template></span>
         </div>
       </div>
     </div>
 
     <!-- 创建账户弹窗 -->
     <Modal :open="showCreate" title="添加交易账户" @close="showCreate = false">
-      <Field label="券商 / 账户名称">
-        <input v-model="form.broker" class="input" placeholder="如：华泰证券" />
+      <Field label="账户显示名称">
+        <input v-model="form.name" class="input" placeholder="如：我的华泰账户" />
+      </Field>
+      <Field label="账户类型">
+        <select v-model="form.type" class="select">
+          <option>模拟盘</option>
+          <option>实盘 · A股</option>
+          <option>实盘 · 美股</option>
+        </select>
+      </Field>
+      <Field label="账户链接地址">
+        <input v-model="form.platformUrl" class="input" placeholder="如：https://trade.example.com" />
       </Field>
       <div class="grid grid-2" style="gap: 12px">
-        <Field label="账户类型">
-          <select v-model="form.type" class="select">
-            <option>模拟盘</option>
-            <option>实盘 · A股</option>
-            <option>实盘 · 美股</option>
-          </select>
+        <Field label="账号">
+          <input v-model="form.loginAccount" class="input" placeholder="登录账号 / 资金账号" />
         </Field>
-        <Field label="初始资金">
-          <input v-model.number="form.capital" type="number" class="input" min="0" />
+        <Field label="密码">
+          <input v-model="form.password" type="password" class="input" placeholder="加密存储，接口不回传" />
         </Field>
       </div>
-      <Field label="资金账号（可选）">
-        <input v-model="form.accountNo" class="input" placeholder="选填，用于展示" />
-      </Field>
       <template #footer>
         <Button variant="ghost" @click="showCreate = false">取消</Button>
         <Button :loading="creating" @click="createAccount">确认创建</Button>
+      </template>
+    </Modal>
+
+    <!-- 更新登录凭证弹窗 -->
+    <Modal :open="showCred" :title="`更新登录凭证 · ${credTarget?.name || ''}`" @close="showCred = false">
+      <Field label="账号">
+        <input v-model="credForm.loginAccount" class="input" placeholder="登录账号 / 资金账号" />
+      </Field>
+      <Field label="新密码">
+        <input v-model="credForm.password" type="password" class="input" placeholder="留空则不修改密码" />
+      </Field>
+      <template #footer>
+        <Button variant="ghost" @click="showCred = false">取消</Button>
+        <Button :loading="credSaving" @click="saveCred">保存凭证</Button>
       </template>
     </Modal>
   </div>

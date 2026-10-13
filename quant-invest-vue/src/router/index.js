@@ -16,6 +16,7 @@ const routes = [
       { path: 'news', component: () => import('../pages/News.vue') },
       { path: 'agents', component: () => import('../pages/Agents.vue') },
       { path: 'strategy', component: () => import('../pages/Strategy.vue') },
+      { path: 'quant-trade', component: () => import('../pages/QuantTrade.vue') },
       { path: 'accounts', component: () => import('../pages/Accounts.vue') },
       { path: 'preferences', component: () => import('../pages/Preferences.vue') }
     ]

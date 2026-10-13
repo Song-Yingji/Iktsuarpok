@@ -39,15 +39,6 @@ from llama_index.core.schema import TextNode
 # 评测集缓存文件（与后端同目录）
 DATASET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rag_eval_dataset.json')
 
-# 五项指标在响应中的键（与前端展示一一对应）
-METRIC_KEYS = (
-    'context_precision',   # 上下文精确率
-    'context_recall',      # 上下文召回率
-    'faithfulness',        # 忠实度
-    'answer_relevance',    # 答案相关性
-    'answer_correctness',  # 答案正确率
-)
-
 
 # ================= 大模型裁判适配器 =================
 class JudgeLLM(CustomLLM):

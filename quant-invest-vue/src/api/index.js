@@ -216,7 +216,16 @@ export const accountApi = {
   list: () => request('/accounts'),
   update: (id, patch) => request('/accounts/' + id, { method: 'PUT', body: patch }),
   create: (payload) => request('/accounts', { method: 'POST', body: payload }),
+  testConnection: (id) => request('/accounts/' + id + '/test-connection', { method: 'POST' }),
   remove: (id) => request('/accounts/' + id, { method: 'DELETE' })
+}
+
+// ---------------- 量化交易任务 ----------------
+export const quantTaskApi = {
+  list: () => request('/quant-tasks'),
+  create: () => request('/quant-tasks', { method: 'POST' }),
+  update: (id, patch) => request('/quant-tasks/' + id, { method: 'PUT', body: patch }),
+  remove: (id) => request('/quant-tasks/' + id, { method: 'DELETE' })
 }
 
 // ---------------- 后台管理（知识库 + 用户） ----------------

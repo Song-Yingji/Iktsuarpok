@@ -10,6 +10,7 @@ import { ref, reactive, computed, toRefs, onMounted } from 'vue'
 import { adminApi } from '../../api'
 import { useApp } from '../../store/app'
 import { Card, Button, Toggle, Slider } from '../ui'
+import EChart from '../EChart.vue'
 
 const { toast } = useApp()
 
@@ -106,6 +107,98 @@ const METRIC_CARDS = [
   { key: 'answer_relevance', label: '答案相关性', en: 'Answer Relevance', desc: 'LLM二值判断\n回答是否切题（是=1、否=0）' },
   { key: 'answer_correctness', label: '答案正确率', en: 'Answer Correctness', desc: 'rubric打分\n打1–5分，归一化到0–1区间' }
 ]
+
+// 优化前基线与行业标准（固定参照值），用于测评对比图
+const BEFORE_SCORES = {
+  context_precision: 0.43,
+  context_recall: 0.45,
+  faithfulness: 0.4,
+  answer_relevance: 0.37,
+  answer_correctness: 0.33
+}
+const BENCH_SCORES = {
+  context_precision: 0.7,
+  context_recall: 0.75,
+  faithfulness: 0.8,
+  answer_relevance: 0.75,
+  answer_correctness: 0.7
+}
+
+const CHART_SERIES = [
+  { name: '优化前', color: '#fbf2a1', scores: BEFORE_SCORES },
+  { name: '行业标准', color: '#fc9a9a', scores: BENCH_SCORES },
+  { name: '一键测评', color: '#46f0ff', scores: null }
+]
+
+// 对比图数据：一键测评分数取本次测评结果，缺省按 0 画
+const chartSeries = computed(() =>
+  CHART_SERIES.map((s) => ({
+    name: s.name,
+    color: s.color,
+    values: METRIC_CARDS.map((m) =>
+      s.scores ? s.scores[m.key] : Number(evalResult.value?.metrics?.[m.key]) || 0
+    )
+  }))
+)
+
+const radarOption = computed(() => ({
+  color: chartSeries.value.map((s) => s.color),
+  tooltip: {},
+  legend: {
+    data: chartSeries.value.map((s) => s.name),
+    top: 0,
+    textStyle: { color: '#93a1bd', fontSize: 12 }
+  },
+  radar: {
+    indicator: METRIC_CARDS.map((m) => ({ name: m.label, max: 1 })),
+    radius: '62%',
+    center: ['50%', '56%'],
+    axisName: { color: '#93a1bd', fontSize: 12 },
+    axisLine: { lineStyle: { color: 'rgba(42, 58, 92, 0.6)' } },
+    splitLine: { lineStyle: { color: 'rgba(42, 58, 92, 0.6)' } },
+    splitArea: { areaStyle: { color: ['rgba(255, 255, 255, 0.02)', 'rgba(255, 255, 255, 0.05)'] } }
+  },
+  series: [
+    {
+      type: 'radar',
+      symbolSize: 4,
+      data: chartSeries.value.map((s) => ({
+        name: s.name,
+        value: s.values,
+        areaStyle: { opacity: 0.18 }
+      }))
+    }
+  ]
+}))
+
+const barOption = computed(() => ({
+  color: chartSeries.value.map((s) => s.color),
+  tooltip: { trigger: 'axis' },
+  legend: {
+    data: chartSeries.value.map((s) => s.name),
+    top: 0,
+    textStyle: { color: '#93a1bd', fontSize: 12 }
+  },
+  grid: { left: 8, right: 16, top: 38, bottom: 4, containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: METRIC_CARDS.map((m) => m.label),
+    axisLabel: { color: '#93a1bd', fontSize: 11, interval: 0 },
+    axisLine: { lineStyle: { color: 'rgba(42, 58, 92, 0.6)' } }
+  },
+  yAxis: {
+    type: 'value',
+    max: 1,
+    axisLabel: { color: '#62718f', fontSize: 11 },
+    splitLine: { lineStyle: { color: 'rgba(42, 58, 92, 0.5)' } }
+  },
+  series: chartSeries.value.map((s) => ({
+    name: s.name,
+    type: 'bar',
+    barMaxWidth: 26,
+    data: s.values
+  }))
+}))
 
 const EVAL_COUNTS = [5, 10, 15, 20]
 
@@ -270,6 +363,18 @@ onMounted(() => {
             <span>耗时：{{ evalResult.elapsedSeconds }} 秒</span>
           </div>
 
+          <!-- 指标对比图：蛛网图 + 柱状图（优化前 / 行业标准 / 一键测评） -->
+          <div class="eval-charts">
+            <div class="chart-card">
+              <div class="chart-title">指标蛛网图</div>
+              <EChart :option="radarOption" style="height: 320px" />
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">指标对比柱状图</div>
+              <EChart :option="barOption" style="height: 320px" />
+            </div>
+          </div>
+
           <div class="eval-table-wrap">
             <table class="eval-table">
               <thead>
@@ -396,8 +501,20 @@ onMounted(() => {
 }
 .metric-raw { color: var(--text-3); font-size: 11px; margin-left: 4px; }
 
+/* ---- 测评对比图（蛛网图 / 柱状图） ---- */
+.eval-charts {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 12px; margin: 4px 0 14px;
+}
+.chart-card {
+  padding: 12px 14px 6px; border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-light);
+}
+.chart-title { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+
 @media (max-width: 900px) {
   .settings-grid { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .eval-charts { grid-template-columns: 1fr; }
 }
 </style>

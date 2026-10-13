@@ -16,6 +16,7 @@ const NAV = [
   { to: '/agents', icon: 'agent', label: 'AI 智能体' },
   { to: '/strategy', icon: 'strategy', label: '量化策略' },
   { to: '/accounts', icon: 'account', label: '账户管理' },
+  { to: '/quant-trade', icon: 'chart', label: '量化交易' },
   { section: '个人' },
   { to: '/preferences', icon: 'prefs', label: '偏好设置' }
 ]
