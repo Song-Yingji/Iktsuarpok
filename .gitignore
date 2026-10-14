@@ -71,5 +71,8 @@ _tmp_*.py
 Thumbs.db
 Desktop.ini
 
+# 快捷方式（形如「xxx - 快捷方式.lnk」）
+*.lnk
+
 # ===== 日志 =====
 *.log

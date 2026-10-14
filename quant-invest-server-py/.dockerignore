@@ -1,0 +1,28 @@
+# 运行时生成 / 本地私有文件，不打进镜像
+__pycache__/
+*.py[cod]
+
+# 连接与 API 配置（镜像内由 docker-entrypoint.sh 按环境变量生成）
+db_config.py
+llm_config.py
+
+# 运行时状态（镜像内重新生成）
+_history_cache.json
+kb_store/
+rag_config.json
+rag_eval_dataset.json
+
+# 本地虚拟环境 / 版本库 / 编辑器
+.venv/
+venv/
+env/
+.git/
+.gitignore
+.vscode/
+.idea/
+.trae/
+Dockerfile
+.dockerignore
+
+# 快捷方式
+*.lnk

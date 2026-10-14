@@ -30,6 +30,7 @@
 | 大模型 | OpenAI 兼容 API（目前是本地 Ollama `qwen3:0.6b` 可切换任意兼容模型）|
 | 向量知识库 | Chroma（本地持久化）· 本地 Ollama `qwen3-embedding:0.6b` 向量化（1024 维） |
 | 效果测评 | LlamaIndex（评测集合成 + Retriever / Faithfulness / Relevancy / Correctness 评估器） |
+| 部署 | Docker · Docker Compose（可选，见「Docker 部署」章节） |
 
 ## 目录结构
 
@@ -51,7 +52,10 @@ Iktsuarpok/
 │   ├── db_config.py              # 数据库连接配置（已 gitignore，需自行创建）
 │   ├── kb_store/                 # Chroma 向量库本地持久化目录（运行时自动生成，已 gitignore）
 │   ├── utils.py                  # 确定性伪随机工具
-│   └── requirements.txt          # 后端依赖
+│   ├── requirements.txt          # 后端依赖
+│   ├── Dockerfile                # 后端镜像：python:3.10-slim + 依赖，由入口脚本启动
+│   ├── docker-entrypoint.sh      # 容器入口：按环境变量生成配置，以 0.0.0.0 启动 uvicorn
+│   └── .dockerignore             # 后端构建上下文忽略：.venv / 配置 / 运行时缓存
 ├── quant-invest-vue/             # 前端（Vue 3 + Vite）
 │   ├── src/
 │   │   ├── api/index.js          # 统一请求封装 + 用户 / 管理员双 token
@@ -62,8 +66,13 @@ Iktsuarpok/
 │   │   ├── store/                # app.js 全局状态、agent.js 智能体状态
 │   │   └── styles/global.css
 │   ├── index.html
-│   └── package.json
+│   ├── package.json
+│   ├── Dockerfile                # 前端镜像：node:22-alpine 构建 → nginx:alpine 托管
+│   ├── nginx.conf                # 静态资源与 SPA 回退 + /api 反向代理到后端
+│   └── .dockerignore             # 前端构建上下文忽略：node_modules / dist
 ├── .venv/                        # Python 虚拟环境（后端依赖安装于此，已 gitignore）
+├── docker-compose.yml            # Docker 编排：mysql + backend + frontend 三服务
+├── .env                          # Docker 部署可选的端口 / 密钥 / 模型覆盖（已 gitignore）
 ├── database_schema.sql           # 数据库建库建表脚本
 ├── 一键启动量化系统.bat          # 一键启动前后端（Windows）
 └── 停止量化系统.bat              # 停止前后端服务
@@ -77,6 +86,7 @@ Iktsuarpok/
 - Node.js 18+
 - MySQL 5.7+
 - Ollama（可选，用于本地对话模型与向量化模型；不装也可改配任意 OpenAI 兼容的云端服务）
+- Docker 20.10+ 与 Docker Compose v2（可选，见「Docker 部署」；用容器运行则本机无需装 Python / Node / MySQL）
 
 ### 1. 创建虚拟环境并安装后端依赖
 
@@ -166,6 +176,75 @@ npm run dev
 浏览器打开 http://localhost:5189
 
 > Windows 下也可直接双击 `一键启动量化系统.bat` 自动完成上述步骤并打开浏览器；双击 `停止量化系统.bat` 可关闭服务。
+
+## Docker 部署
+
+不想在本机装 Python / Node / MySQL 时，可用 Docker 一条命令拉起整套系统：MySQL、FastAPI 后端、Nginx 前端三个容器由 `docker-compose.yml` 统一编排。
+
+### 前置条件
+
+- 安装 Docker Desktop（Windows / macOS）或 Docker Engine + Compose v2（Linux）
+- 本机已安装并启动 Ollama（对话模型与向量化模型跑在宿主机上，容器通过 `host.docker.internal` 访问）
+
+### 启动
+
+```bash
+# 在项目根目录执行
+docker compose up -d --build     # 构建并启动三个容器（首次需下载依赖，耗时较长）
+docker compose ps                # 查看容器状态
+docker compose logs -f backend   # 查看后端日志
+docker compose restart backend   # 只重启后端
+docker compose down              # 停止并删除容器（数据卷保留）
+docker compose down -v           # 连同 MySQL 数据与向量知识库一起清空（慎用）
+```
+
+启动完成后访问 http://localhost:5189 ，后台管理入口 http://localhost:5189/admin/login （默认 `admin` / `123456`）。
+
+### Docker 相关文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `docker-compose.yml` | 编排 mysql / backend / frontend 三个服务；对外发布前端 `5189`、MySQL `3307`（避开本机已有的 3306）；backend 不对外发布端口，仅由 Nginx 反向代理访问；声明 `host.docker.internal:host-gateway` 让容器能访问宿主机服务 |
+| `quant-invest-server-py/Dockerfile` | 后端镜像：基于 `python:3.10-slim` 安装 `requirements.txt` 依赖，由入口脚本启动 |
+| `quant-invest-server-py/docker-entrypoint.sh` | 容器入口脚本：按环境变量生成 `db_config.py` / `llm_config.py`，再以 `0.0.0.0:3000` 启动 uvicorn |
+| `quant-invest-server-py/.dockerignore` | 后端构建上下文忽略：`.venv` / 配置文件 / 运行时缓存 |
+| `quant-invest-vue/Dockerfile` | 前端镜像：`node:22-alpine` 构建静态包 → `nginx:alpine` 托管 |
+| `quant-invest-vue/nginx.conf` | 静态资源与 SPA 路由回退，并把 `/api` 反向代理到 backend |
+| `quant-invest-vue/.dockerignore` | 前端构建上下文忽略：`node_modules` / `dist` |
+
+### 可调参数
+
+在项目根目录新建 `.env` 覆盖 compose 中的默认值（该文件已加入 `.gitignore`）：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WEB_HOST_PORT` | `5189` | 前端对外端口 |
+| `MYSQL_HOST_PORT` | `3307` | MySQL 对外端口（仅需外部工具连库时用到） |
+| `MYSQL_ROOT_PASSWORD` | `123456` | MySQL root 密码 |
+| `XB_QUANT_SECRET` | `xb-quant-internal-secret` | 登录 token 的 HMAC 签名密钥 |
+| `CRED_SECRET_KEY` | 内置默认值 | 账户登录凭证的 Fernet 加密密钥；**务必固定**，否则重启后已存的凭证密文无法解密 |
+| `LLM_API_BASE_URL` | `http://host.docker.internal:11434/v1` | 对话模型地址 |
+| `LLM_MODEL_NAME` | `qwen3:0.6b` | 对话模型名 |
+| `EMBED_BASE_URL` | `http://host.docker.internal:11434/v1` | 向量化模型地址 |
+| `EMBED_MODEL` | `qwen3-embedding:0.6b` | 向量化模型名 |
+
+### 关键设计
+
+- **同源请求**：前端镜像构建时注入 `VITE_API_BASE=/api`，页面用相对路径请求、由 Nginx 代理到后端，因此换机器、换域名都不用改代码，浏览器侧也不会出现跨域。
+- **配置由入口脚本生成**：`db_config.py`、`llm_config.py` 是私人配置（已 gitignore、镜像内不存在），容器每次启动都会按环境变量重新生成；若要使用自定义配置，把同名文件挂载到容器 `/app` 即可（脚本检测到文件已存在就跳过生成）。
+- **模型跑在宿主机**：容器内的 `127.0.0.1` 指容器自身，因此模型地址写 `host.docker.internal`（Docker Desktop 内置该别名并转发到宿主机 loopback，Ollama 只监听 `127.0.0.1:11434` 也能连上）；数据库则写服务名 `mysql`。
+- **数据持久化**：MySQL 数据（卷 `mysql-data`）与向量知识库 `kb_store/`（卷 `kb-store`）都在数据卷中，重建容器不丢。
+
+### 注意事项
+
+- `_history_cache.json`（行情历史缓存）、`rag_config.json`（后台模块设置）、`rag_eval_dataset.json`（测评集缓存）落在容器可写层，`docker compose down` 或重新构建后会丢失；如需保留，可先备份：`docker compose cp backend:/app/rag_config.json .`
+- 想沿用本机已有的用户 / 策略 / 账户数据，导出后导入容器即可：
+  ```bash
+  mysqldump -uroot -p xb_quant > xb_quant_dump.sql
+  docker compose exec -T mysql mysql -uroot -p123456 xb_quant < xb_quant_dump.sql
+  ```
+- `database_schema.sql` 挂在 MySQL 容器的 `/docker-entrypoint-initdb.d/`，**仅数据卷为空（首次启动）时执行**；删掉 `mysql-data` 卷重新 `up` 会得到一个全新空库。
+- 国内直连 Docker Hub 较慢或拉不动基础镜像时，可在 Docker Desktop → Settings → Docker Engine 里配置镜像加速：`{ "registry-mirrors": ["https://docker.1panel.live", "https://docker.1ms.run"] }`
 
 ## 虚拟环境管理
 
@@ -614,7 +693,8 @@ flowchart TD
 - 向量化默认走本地 Ollama（`qwen3-embedding:0.6b`），上传文档与检索时需保证 Ollama 在 `localhost:11434` 运行；Ollama 未启动时后台会提示「向量化服务调用失败」，知识库不可用但策略生成等其它功能不受影响。换用其它向量模型后必须清空 `kb_store/` 重建索引，不同模型的向量不可混用。
 - 后台账号复用 `users` 表，权限由单字段 `role` 表示（`0` 普通用户 / `1` 管理员 / `2` 超级管理员）：`role ≥ 1` 即可登录后台，可在「用户管理」中开关授予（仅超级管理员可操作）。超级管理员（`role=2`）全局唯一，由后端首次启动时按 `admin_config.py` 播种（默认 `admin / 123456`），不可删除、不可取消管理员身份。后台登录态与前台的 `quant_token` 完全独立。
 - 后台用户管理接口每次请求都会回库复核管理员身份，账号被删除或被取消权限后，其已签发的 token 立即失效（返回 401 并跳回登录页）。
-- `db_config.py`（数据库密码）与 `llm_config.py`（大模型 / 向量化模型 API Key）含敏感信息，已加入 `.gitignore`，请勿提交到版本库。
-- 后端默认监听 `127.0.0.1:3000`，前端通过环境变量 `VITE_API_BASE` 可覆盖其 API 地址（默认 `http://localhost:3000/api`）。
+- `db_config.py`（数据库密码）与 `llm_config.py`（大模型 / 向量化模型 API Key）含敏感信息，已加入 `.gitignore`，请勿提交到版本库；Docker 部署不使用这两个文件，改由容器入口脚本按环境变量生成。
+- 后端默认监听 `127.0.0.1:3000`，前端通过环境变量 `VITE_API_BASE` 可覆盖其 API 地址（默认 `http://localhost:3000/api`）；Docker 镜像在构建时注入 `VITE_API_BASE=/api`，由 Nginx 同源反向代理，无需关心部署地址。
+- Docker 部署下，`_history_cache.json`（行情历史缓存）、`rag_config.json`（后台模块设置）、`rag_eval_dataset.json`（测评集缓存）落在容器可写层，`docker compose down` 或重建容器后会丢失；MySQL 数据与 `kb_store/` 向量库分别存放在 `mysql-data`、`kb-store` 数据卷中，不受影响。完整的 Docker 部署说明见上文「Docker 部署」章节。
 - 后端依赖统一安装在项目根目录的 `.venv/` 虚拟环境（已 gitignore），与系统全局 Python 隔离；`一键启动量化系统.bat` 优先使用 `.venv\Scripts\python.exe`，未检测到虚拟环境时回退到系统 `python` 并给出提示。
 - 本平台仅供学习演示，不构成任何投资建议，股市有风险，投资需谨慎！
