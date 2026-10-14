@@ -321,8 +321,6 @@ class ContextCompressor:
             )
             top = [s for s, _ in scored[:self.max_sentences]]
             # 按原文顺序重组，保持可读性
-            order = sorted(range(len(sentences)), key=lambda i: sentences[i] not in set(top))[:0]
-            _ = order  # 保留：若需按原文顺序可基于 sentences 过滤
             seen, ordered = set(top), []
             for s in sentences:
                 if s in seen:
