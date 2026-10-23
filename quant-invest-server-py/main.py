@@ -959,8 +959,11 @@ def admin_rag_eval(payload: dict = Body(default=None), _: str = Depends(get_curr
     except rag.RagError as e:
         return fail(400, str(e))
     except Exception as e:
+        # 详细原因（缺语料 / 模型异常等）只进后端日志，前端统一友好文案
+        import traceback
         print(f'[warn] RAG 效果测评失败：{e}')
-        return fail(500, f'评测失败：{e}')
+        traceback.print_exc()
+        return fail(500, '服务器繁忙，请稍后重试')
 
 
 # ================= 后台管理（用户管理） =================

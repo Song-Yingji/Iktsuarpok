@@ -48,6 +48,10 @@ STOCKS = [
 # ============ 真实历史行情（Baostock，前复权，截至最近已收盘交易日） ============
 _HISTORY_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_history_cache.json')
 
+# 迷你走势（spark）时间窗口：取最近多少个交易日收盘价。
+# 前端对 spark 做归一化（以窗口首日为基准的累计涨跌幅），窗口取 120 天（约半年，指数历史缓存上限）。
+SPARK_DAYS = 120
+
 
 def _bs_symbol(code):
     """转为 Baostock 证券代码：600519 -> sh.600519，SH000001 -> sh.000001。"""
@@ -145,10 +149,10 @@ def _apply_histories(data):
     for s in m['stocks']:
         if s['code'] in data:
             s['history'] = data[s['code']]
-            s['spark'] = [round(c['close'], 2) for c in s['history'][-60:]]
+            s['spark'] = [round(c['close'], 2) for c in s['history'][-SPARK_DAYS:]]
     for ix in m['indices']:
         if ix['code'] in data:
-            ix['spark'] = [round(c['close'], 2) for c in data[ix['code']][-60:]]
+            ix['spark'] = [round(c['close'], 2) for c in data[ix['code']][-SPARK_DAYS:]]
 
 
 def _refresh_real_histories():
@@ -184,7 +188,7 @@ def get_market():
             prev_close = last['close']
             volume = last['volume']
             amount = last['volume'] * last['close']
-            spark = [round(c['close'], 2) for c in history[-60:]]
+            spark = [round(c['close'], 2) for c in history[-SPARK_DAYS:]]
         else:
             prev_close = s['base']
             volume = 0
@@ -213,7 +217,7 @@ def get_market():
         if history:
             last = history[-1]
             prev_close = last['close']
-            spark = [round(c['close'], 2) for c in history[-60:]]
+            spark = [round(c['close'], 2) for c in history[-SPARK_DAYS:]]
         else:
             prev_close = ix['base']
             spark = []

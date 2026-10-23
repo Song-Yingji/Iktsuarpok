@@ -1,11 +1,11 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { quantTaskApi, watchlistApi, strategyApi, accountApi, settingsApi } from '../api'
 import { useApp } from '../store/app'
 import { Card, Button, Badge, Toggle, Modal, Chip } from '../components/ui'
 import Icon from '../components/Icon.vue'
 
-const { toast } = useApp()
+const { toast, market } = useApp()
 
 const tasks = ref([])
 const stocks = ref([]) // 自选股 {code, name}
@@ -23,6 +23,14 @@ const stockView = ref(null) // 查看完整标的列表的任务，null 表示�
 const editOpen = ref(false)
 const editTaskId = ref(null)
 const draft = ref({ stockCodes: [], strategyId: null, accountId: null })
+
+// 全市场标的（个股 + 指数），用于解析任务标的名称，与自选股解耦：
+// 删除自选股后，已创建任务里的标的仍能正常展示与编辑
+const allSecurities = computed(() => [...market.value.stocks, ...market.value.indices])
+const securityName = (code) => {
+  const s = allSecurities.value.find((x) => x.code === code)
+  return s ? s.name : null
+}
 
 async function load() {
   loading.value = true
@@ -131,6 +139,17 @@ function toggleDraftCode(code) {
   draft.value = { ...draft.value, stockCodes: [...codes] }
 }
 
+// 编辑弹窗候选标的 = 当前自选股 ∪ 任务已选但已移出自选股的标的，
+// 后者用全市场行情解析名称，保证删除自选股后任务编辑不受影响
+const editCandidates = computed(() => {
+  const map = new Map()
+  for (const s of stocks.value) map.set(s.code, { code: s.code, name: s.name })
+  for (const c of draft.value.stockCodes) {
+    if (!map.has(c)) map.set(c, { code: c, name: securityName(c) || c })
+  }
+  return [...map.values()]
+})
+
 function onDraftStrategy(e) {
   const v = e.target.value
   draft.value = { ...draft.value, strategyId: v ? Number(v) : null }
@@ -156,10 +175,7 @@ async function saveEdit() {
 }
 
 // ===== 展示辅助 =====
-const codeName = (c) => {
-  const s = stocks.value.find((x) => x.code === c)
-  return s ? s.name : c + '(已移出)'
-}
+const codeName = (c) => securityName(c) || c
 const strategyName = (t) => {
   const s = strategies.value.find((x) => x.id === t.strategyId)
   return s ? s.name : '策略已删除'
@@ -286,13 +302,13 @@ onMounted(load)
         <div class="field-label">投资标的（可多选）</div>
         <div class="pick-wrap">
           <button
-            v-for="s in stocks"
-            :key="s.code"
+            v-for="c in editCandidates"
+            :key="c.code"
             class="pick-chip"
-            :class="{ on: draft.stockCodes.includes(s.code) }"
-            @click="toggleDraftCode(s.code)"
-          >{{ s.name }}（{{ s.code }}）</button>
-          <span v-if="!stocks.length" class="pick-hint">暂无自选股，可先到「自选股」页添加</span>
+            :class="{ on: draft.stockCodes.includes(c.code) }"
+            @click="toggleDraftCode(c.code)"
+          >{{ c.name }}（{{ c.code }}）</button>
+          <span v-if="!editCandidates.length" class="pick-hint">暂无自选股，可先到「自选股」页添加</span>
         </div>
       </div>
 

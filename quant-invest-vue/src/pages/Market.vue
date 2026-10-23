@@ -23,27 +23,58 @@ async function addWatch(s) {
   toast(`已将 ${s.name} 加入自选股`)
 }
 
-// 迷你走势图
-function sparkOption(data, up) {
+// 迷你走势图（归一化累计涨跌幅 + 平滑曲线 + 渐变面积 + 末点高亮与涟漪）
+// pct 为已归一化的涨跌幅序列(%)，四个指数共享 yMin/yMax，保证相对强弱可直接对比
+function sparkOption(pct, yMin, yMax, up) {
+  if (!pct || !pct.length) return { series: [] }
+  const color = up ? '#f6465d' : '#0ecb81'
+  const alpha = (a) => (up ? `rgba(246,70,93,${a})` : `rgba(14,203,129,${a})`)
+  const last = pct.length - 1
+  const lastVal = pct[last]
   return {
     animation: false,
-    grid: { left: 0, right: 0, top: 4, bottom: 0 },
-    xAxis: { type: 'category', show: false, data: data.map((_, i) => i) },
-    yAxis: { type: 'value', show: false, scale: true },
+    grid: { left: 5, right: 5, top: 8, bottom: 6 },
+    xAxis: { type: 'category', show: false, data: pct.map((_, i) => i), boundaryGap: false },
+    yAxis: { type: 'value', show: false, min: yMin, max: yMax },
     tooltip: { show: false },
-    series: [{
-      type: 'line', data, showSymbol: false, smooth: true,
-      lineStyle: { width: 1.5, color: up ? '#f6465d' : '#0ecb81' },
-      areaStyle: {
-        color: {
-          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [
-            { offset: 0, color: up ? 'rgba(246,70,93,0.25)' : 'rgba(14,203,129,0.25)' },
-            { offset: 1, color: 'rgba(0,0,0,0)' }
-          ]
-        }
+    series: [
+      {
+        type: 'line',
+        data: pct,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { width: 1.8, color, shadowColor: color, shadowBlur: 6 },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: alpha(0.3) },
+              { offset: 0.6, color: alpha(0.08) },
+              { offset: 1, color: 'rgba(0,0,0,0)' }
+            ]
+          }
+        },
+        z: 2
+      },
+      {
+        type: 'scatter',
+        data: [[last, lastVal]],
+        symbolSize: 6,
+        itemStyle: { color, borderColor: 'rgba(255,255,255,0.95)', borderWidth: 1.5 },
+        silent: true,
+        z: 4
+      },
+      {
+        type: 'effectScatter',
+        data: [[last, lastVal]],
+        symbolSize: 10,
+        showEffectOn: 'render',
+        rippleEffect: { scale: 2.2, brushType: 'stroke' },
+        itemStyle: { color: alpha(0.45) },
+        silent: true,
+        z: 3
       }
-    }]
+    ]
   }
 }
 
@@ -114,6 +145,43 @@ const filtered = computed(() => market.value.stocks.filter((s) => {
 }))
 
 const chgOf = (p, prev) => (p - prev) / prev
+
+// 交易状态：按当前时间动态判断（A股交易日 09:30-11:30 / 13:00-15:00，周末休市）
+const marketStatus = computed(() => {
+  const now = new Date()
+  const day = now.getDay()
+  const t = now.getHours() * 60 + now.getMinutes()
+  if (day === 0 || day === 6) return { text: '周末休市', tone: 'neutral', dot: false }
+  if (t < 9 * 60 + 30) return { text: '未开盘', tone: 'neutral', dot: false }
+  if (t < 11 * 60 + 30) return { text: '交易中', tone: 'info', dot: true }
+  if (t < 13 * 60) return { text: '午间休市', tone: 'warn', dot: false }
+  if (t < 15 * 60) return { text: '交易中', tone: 'info', dot: true }
+  return { text: '已收盘', tone: 'neutral', dot: false }
+})
+
+// 大盘指数缩略图：以各自窗口首日为基准，归一化成累计涨跌幅(%)；
+// 四个指数共享同一纵轴范围，既能看趋势，又能直观对比 90 天内的相对强弱
+const indexSparks = computed(() => {
+  const norm = market.value.indices.map((ix) => {
+    const data = ix.spark || []
+    let pct = []
+    if (data.length && data[0]) {
+      const base = data[0]
+      pct = data.map((v) => +(((v / base) - 1) * 100).toFixed(2))
+    }
+    return { ...ix, pct, last: pct.length ? pct[pct.length - 1] : 0 }
+  })
+  let yMin = 0
+  let yMax = 0
+  for (const n of norm) {
+    for (const v of n.pct) {
+      if (v < yMin) yMin = v
+      if (v > yMax) yMax = v
+    }
+  }
+  const pad = Math.max((yMax - yMin) * 0.12, 0.5)
+  return { norm, yMin: yMin - pad, yMax: yMax + pad }
+})
 </script>
 
 <template>
@@ -124,7 +192,7 @@ const chgOf = (p, prev) => (p - prev) / prev
         <p>A股大盘指数与个股实时行情 · 数据每 2 秒推送</p>
       </div>
       <div class="page-actions">
-        <Badge tone="info" dot>交易中 09:30 - 15:00</Badge>
+        <Badge :tone="marketStatus.tone" :dot="marketStatus.dot">{{ marketStatus.text }}</Badge>
       </div>
     </div>
 
@@ -136,7 +204,7 @@ const chgOf = (p, prev) => (p - prev) / prev
 
     <!-- 大盘指数 -->
     <div class="grid grid-4">
-      <div v-for="ix in market.indices" :key="ix.code" class="index-card">
+      <div v-for="ix in indexSparks.norm" :key="ix.code" class="index-card">
         <div class="index-name">
           <span>{{ ix.name }}</span>
           <span style="font-size: 11px">{{ ix.code }}</span>
@@ -145,7 +213,7 @@ const chgOf = (p, prev) => (p - prev) / prev
         <div :class="['index-chg', tone(chgOf(ix.price, ix.prevClose))]">
           {{ fmt.pct(chgOf(ix.price, ix.prevClose)) }} &nbsp;{{ fmt.num(ix.price - ix.prevClose) }}
         </div>
-        <EChart :option="sparkOption(ix.spark, chgOf(ix.price, ix.prevClose) >= 0)" style="height: 34px; margin-top: 6px" />
+        <EChart :option="sparkOption(ix.pct, indexSparks.yMin, indexSparks.yMax, chgOf(ix.price, ix.prevClose) >= 0)" style="height: 34px; margin-top: 6px" />
       </div>
     </div>
 

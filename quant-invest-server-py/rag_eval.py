@@ -94,6 +94,25 @@ def _build_chunk_index():
 
 
 # ================= 评测集（RagDatasetGenerator 合成） =================
+def _generate_dataset_with_retry(generator: RagDatasetGenerator, attempts: int = 3):
+    """合成评测集，NLTK 语料缺失导致失败时重试，最多 attempts 次。
+
+    RagDatasetGenerator 内部用 SummaryIndex.from_documents 重建节点，回落默认
+    SentenceSplitter；只有分块超过 chunk_size 时才会调用 NLTK 分句器，此时
+    llama_index 会自行尝试下载缺失语料。下载受网络影响，重试即可重新触发；
+    超过上限仍失败则抛出，由接口层返回统一友好文案。
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            return generator.generate_dataset_from_nodes()
+        except LookupError as e:
+            last = e
+            if i < attempts - 1:
+                time.sleep(1.5 * (i + 1))
+    raise RuntimeError(f'评测集合成失败：缺少 NLTK 语料（{last}）') from last
+
+
 # 出题指令：知识库与检索链路均以中文为主，强制用中文出题，
 # 避免英文合成问题在中文语义检索/自反思判定中被整体丢弃。
 _QUESTION_GEN_QUERY = (
@@ -191,7 +210,7 @@ def build_dataset(num_questions: int = 10, regenerate: bool = False,
         show_progress=False,
         workers=1,
     )
-    dataset = generator.generate_dataset_from_nodes()
+    dataset = _generate_dataset_with_retry(generator)
 
     examples: List[Dict] = []
     for ex in dataset.examples:
