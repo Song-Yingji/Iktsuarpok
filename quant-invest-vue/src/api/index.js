@@ -206,7 +206,9 @@ export const strategyApi = {
   frameworks: () => request('/strategy/frameworks'),
   saved: () => request('/strategy/saved'),
   save: (payload) => request('/strategy/saved', { method: 'POST', body: payload }),
-  remove: (id) => request('/strategy/saved/' + id, { method: 'DELETE' })
+  update: (id, payload) => request('/strategy/saved/' + id, { method: 'PUT', body: payload }),
+  remove: (id) => request('/strategy/saved/' + id, { method: 'DELETE' }),
+  validateBuilder: (graph) => request('/strategy/builder/validate', { method: 'POST', body: { graph } })
 }
 
 export const runBacktest = (payload) => request('/strategy/backtest', { method: 'POST', body: payload })

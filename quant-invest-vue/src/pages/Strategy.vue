@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { runBacktest, strategyApi } from '../api'
 import { fmt, tone } from '../lib/utils'
 import { Card, Button, Badge, Field, Steps } from '../components/ui'
@@ -94,6 +95,8 @@ function drawdownChartOption(result) {
 }
 
 const { toast, market, frameworks } = useApp()
+const router = useRouter()
+const route = useRoute()
 const stocks = computed(() => market.value.stocks)
 
 const saved = ref([])
@@ -114,7 +117,9 @@ async function load() {
   loading.value = true
   try {
     saved.value = await strategyApi.saved()
-    if (!selectedId.value && saved.value.length) selectedId.value = saved.value[0].id
+    const focus = Number(route.query.focus)
+    if (focus && saved.value.some((s) => s.id === focus)) selectedId.value = focus
+    else if (!selectedId.value && saved.value.length) selectedId.value = saved.value[0].id
   } finally {
     loading.value = false
   }
@@ -178,7 +183,10 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h1>量化策略与回测</h1>
-        <p>展示智能体生成并保存的策略，选择回测标的、区间和框架，用历史数据验证策略有效性</p>
+        <p>展示智能体生成或自由构建保存的策略，选择回测标的、区间和框架，用历史数据验证策略有效性</p>
+      </div>
+      <div class="page-actions">
+        <Button icon="sliders" @click="router.push('/strategy/builder')">自由构建新策略</Button>
       </div>
     </div>
 
@@ -186,7 +194,7 @@ onMounted(load)
       <div v-if="loading" style="text-align:center;padding:32px;color:var(--text-3)">策略加载中…</div>
       <div v-else-if="!saved.length" class="empty-state" style="padding: 32px 20px">
         <Icon name="strategy" :size="30" />
-        <p>暂无已保存的策略，请前往「AI 智能体」页生成并保存策略</p>
+        <p>暂无已保存的策略，可前往「AI 智能体」生成，或在「自由构建」页拖拽搭建</p>
       </div>
       <div v-else class="grid grid-3" style="gap: 12px">
         <div
@@ -200,13 +208,25 @@ onMounted(load)
               {{ s.name }}
               <Badge tone="neutral">{{ s.type }}</Badge>
             </h4>
-            <button class="icon-btn" title="删除策略" @click.stop="removeStrategy(s)">
-              <Icon name="close" :size="15" />
-            </button>
+            <div style="display: flex; gap: 2px; flex-shrink: 0">
+              <button
+                v-if="s.engineId === 'builder'"
+                class="icon-btn"
+                title="编辑策略"
+                @click.stop="router.push(`/strategy/builder/${s.id}`)"
+              >
+                <Icon name="sliders" :size="15" />
+              </button>
+              <button class="icon-btn" title="删除策略" @click.stop="removeStrategy(s)">
+                <Icon name="close" :size="15" />
+              </button>
+            </div>
           </div>
           <p>{{ (s.rules && s.rules[0]) || '无策略规则描述' }}</p>
           <div class="strat-meta">
-            <Badge tone="info">智能体生成</Badge>
+            <Badge :tone="s.engineId === 'builder' ? 'purple' : 'info'">
+              {{ s.engineId === 'builder' ? '自由构建' : '智能体生成' }}
+            </Badge>
             <Badge tone="neutral">{{ s.createdAt }}</Badge>
           </div>
         </div>

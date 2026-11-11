@@ -6,13 +6,14 @@
 
 - **真实行情引擎**：24 只 A 股 + 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
 - **AI 策略生成（Quant Buffett）**：用自然语言描述投资想法，大模型一次性返回对话内容与结构化策略，可一键保存到「我的量化策略」；内置 RAG 检索增强，回答前先召回本地知识库片段
+- **自由构建（Strategy Builder）**：拖拽式画布搭建策略——数据源 / 技术指标 / 条件判断 / 逻辑组合 / 交易动作五类节点连线成图，端口分数值序列与布尔信号、同类才能相连；保存前实时校验（缺连线 / 类型不匹配 / 成环 / 缺买卖信号等），通过后生成规则文本与伪代码预览，内置双均线 / MACD 零轴上金叉 / RSI 超卖反转三套模板，支持编辑已保存策略并一键回测；图以纯数据 DSL 存入 `saved_strategies`（`engine_id='builder'`），后端白名单求值、不执行任何用户代码
 - **AI 智能荐股（Recommend Buffett）**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
 - **向量知识库（RAG）**：独立后台管理页上传文档，经递归分块与本地 Ollama `qwen3-embedding` 向量化后写入本地 Chroma；策略生成时走模块化检索管线（查询改写 → 多路检索 → RRF 融合 → 重排序 → 上下文压缩）召回 Top-K 片段拼入提示词；可开启本地大模型 Self-RAG 分析（判定是否检索、内容是否有用）
 - **知识库管理后台**：左侧功能导航（用户管理 / 上传文档 / 检索测试）+ 右侧面板，支持文档上传 / 列表 / 删除、知识库统计与检索测试
 - **后台模块设置**：可插拔模块化 RAG 检索管线——按需开启 / 关闭「查询改写 / 多路融合 / 重排序 / 上下文压缩 / 本地大模型分析（Self-RAG）」各模块，并调整融合方式、改写方式、召回条数与相似度下限，保存后策略生成即时生效
 - **效果测评（LlamaIndex）**：后台一键测评当前 RAG 配置，评测集由 LlamaIndex `RagDatasetGenerator` 从知识库自动合成（问题 + 标准答案 + 来源片段，按指纹缓存复用），输出上下文精确率 / 上下文召回率 / 忠实度 / 答案相关性 / 答案正确率五项指标与逐题明细；并以蛛网图 + 柱状图对比「优化前基线 / 行业标准 / 一键测评」三组分数
 - **后台用户管理**：查看全部用户（含管理员），新增 / 编辑 / 删除账号；权限变更（是否管理员）与删除管理员账号仅超级管理员可操作，普通管理员只能删除普通用户，且变更即时生效（每次请求回库复核）
-- **策略回测**：内置双均线、MACD、布林带、RSI、动量突破 5 种回测引擎，选择标的 / 区间 / 框架即可回测
+- **策略回测**：内置双均线、MACD、布林带、RSI、动量突破 5 种回测引擎，自由构建策略也走同一套模拟交易与绩效计算，选择标的 / 区间 / 框架即可回测
 - **回测指标**：总收益、年化收益、最大回撤、夏普比率、CVaR、胜率、盈亏比等
 - **账户管理**：模拟盘 / 实盘账户独立管理；登录凭证与账户本体分离、Fernet 加密存储，连接器层按账户类型路由（模拟盘固定 100 万、实盘经平台适配器拉取），连接测试成功后自动读取账户资金回填
 - **量化交易**：交易任务卡片管理——每张卡片配置标的 / 策略 / 账户（Chip 标签展示、三列对齐，标的超 3 个可点开查看全部）；点「修改」弹窗编辑、保存后生效，三要素齐备才能开启自动交易
@@ -24,7 +25,7 @@
 
 | 端 | 技术 |
 | --- | --- |
-| 前端 | Vue 3 · Vite · Vue Router · ECharts |
+| 前端 | Vue 3 · Vite · Vue Router · ECharts · Vue Flow（自由构建画布） |
 | 后端 | Python · FastAPI · Uvicorn · PyMySQL |
 | 数据库 | MySQL 5.7+ |
 | 大模型 | OpenAI 兼容 API（目前是本地 Ollama `qwen3:0.6b` 可切换任意兼容模型）|
@@ -37,13 +38,18 @@
 ```
 Iktsuarpok/
 ├── quant-invest-server-py/       # Python 后端（FastAPI）
-│   ├── main.py                   # 路由、鉴权、指标计算、回测、智能体、后台管理接口
+│   ├── main.py                   # 应用入口：装配路由、启动行情 / 新闻引擎、超级管理员播种、全局异常处理
+│   ├── routers/                  # 按业务拆分的 APIRouter 包（auth / market / prefs / agent / admin / kb / strategy / watchlist / accounts / tasks）
+│   ├── common.py                 # 跨路由共享工具：统一错误响应、JSON 列读取、用户 / 管理员鉴权依赖
 │   ├── data.py                   # 行情 / 新闻数据引擎与静态配置
 │   ├── db.py                     # MySQL 数据访问层
 │   ├── auth.py                   # PBKDF2 密码哈希与 HMAC 签名 token（用户 / 管理员双 scope）
 │   ├── admin_config.py           # 超级管理员账号（仅首次启动播种，全局唯一、不可删除）
 │   ├── credentials.py            # 账户登录凭证 Fernet 加密存取（account_credentials 表）
 │   ├── connectors.py             # 账户连接器层：按账户类型路由，连接测试与资金读取（模拟盘 / 通用 HTTP）
+│   ├── backtest.py               # 回测引擎：内置五策略信号 + 自由构建图信号，共用模拟交易与绩效计算
+│   ├── indicators.py             # 共享技术指标：SMA / EMA / RSI（回测与自由构建复用）
+│   ├── builder_engine.py         # 自由构建引擎：图 DSL 校验 → 拓扑求值编译买卖信号 → 规则文本 / 伪代码生成
 │   ├── rag.py                    # 本地向量知识库：文本抽取 → 递归分块 → 向量化 → Chroma
 │   ├── modular_rag.py            # 模块化 RAG：查询改写 → 多路检索（向量 + BM25）→ RRF 融合 → 重排序 → 上下文压缩
 │   ├── rag_eval.py               # LlamaIndex 效果测评：评测集合成（缓存）+ 五项指标评估
@@ -59,9 +65,9 @@ Iktsuarpok/
 ├── quant-invest-vue/             # 前端（Vue 3 + Vite）
 │   ├── src/
 │   │   ├── api/index.js          # 统一请求封装 + 用户 / 管理员双 token
-│   │   ├── components/           # Layout、智能体组件、通用 ui 组件、admin 后台面板（用户 / 文档 / 检索 / 模块设置 / 效果测评）
-│   │   ├── lib/                  # constants.js 静态选项、utils.js 格式化
-│   │   ├── pages/                # 各业务页面（含 Admin.vue / AdminLogin.vue 后台）
+│   │   ├── components/           # Layout、智能体组件、通用 ui 组件、builder 画布节点、admin 后台面板（用户 / 文档 / 检索 / 模块设置 / 效果测评）
+│   │   ├── lib/                  # constants.js 静态选项、utils.js 格式化、builderSchema.js 自由构建图 DSL 前端定义与模板
+│   │   ├── pages/                # 各业务页面（含 StrategyBuilder.vue 自由构建、Admin.vue / AdminLogin.vue 后台）
 │   │   ├── router/index.js       # 路由与登录守卫（前台 / 后台两套独立登录态）
 │   │   ├── store/                # app.js 全局状态、agent.js 智能体状态
 │   │   └── styles/global.css
@@ -287,7 +293,8 @@ python3 -m venv .venv
 - 自选股：关注的个股实时行情与移除
 - 财经资讯：分类浏览与关键词搜索
 - AI 智能体：智能荐股（Recommend Buffett）、策略生成（Quant Buffett）
-- 量化策略：已保存的智能体策略列表、删除、选择回测标的 / 区间 / 框架并查看回测结果
+- 量化策略：已保存策略列表（智能体生成 / 自由构建两类徽标区分）、删除、选择回测标的 / 区间 / 框架并查看回测结果，自由构建策略可点编辑回到画布
+- 自由构建（`/strategy/builder`）：拖拽节点画布搭建策略，左侧节点面板 / 中间画布 / 右侧参数与校验结果，载入模板、实时校验、保存与保存并回测，支持编辑已保存策略（`/strategy/builder/:id`）
 - 账户管理：账户列表、新增 / 编辑 / 解绑账户，登录凭证加密存储，连接测试成功后自动读取资金
 - 量化交易：交易任务卡片（标的 / 策略 / 账户标签化展示、三列对齐）、「修改」弹窗编辑、自动交易开关（标的 + 策略 + 账户齐备才可开启）、交易提醒开关
 - 投资偏好：多套偏好的列表管理，新增 / 编辑通过弹窗完成，可设为默认供荐股使用
@@ -305,14 +312,16 @@ python3 -m venv .venv
 graph TB
     subgraph FE["前端 Vue 3 + Vite"]
         PAGES[pages 页面]
-        COMP[components 组件<br/>Layout / StrategyAgent / RecommendAgent / ui]
+        COMP[components 组件<br/>Layout / StrategyAgent / RecommendAgent / BuilderNode / ui]
         APIJS[api/index.js 统一请求]
         STORE[store/app.js 全局状态<br/>store/agent.js 智能体状态]
     end
 
-    subgraph BE["后端 FastAPI (main.py)"]
+    subgraph BE["后端 FastAPI（main.py 入口 + routers/ 业务路由）"]
+        ROUTES[routers/ 业务路由<br/>auth / market / agent / strategy / accounts ...]
         AUTH[auth.py 密码哈希 + 签名 token<br/>用户 / 管理员双 scope]
         ADMIN[admin_config.py 管理员固定账号]
+        BACKTEST[backtest.py 回测引擎<br/>indicators.py 指标 + builder_engine.py 图信号]
         LLM[llm.py 大模型接入层]
         RAG[rag.py 向量知识库<br/>分块 / 向量化 / 检索]
         MODRAG[modular_rag.py 模块化检索管线<br/>改写 / 多路检索 / RRF 融合 / 重排 / 压缩]
@@ -336,7 +345,11 @@ graph TB
     PAGES --> APIJS
     COMP --> STORE
     STORE --> APIJS
-    APIJS -->|HTTP /api| BE
+    APIJS -->|HTTP /api| ROUTES
+    ROUTES --> AUTH
+    ROUTES --> BACKTEST
+    ROUTES --> DB
+    BACKTEST --> DATA
     LLM --> LLMS
     RAG --> EMB
     RAG --> CHROMA
@@ -547,9 +560,10 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[量化策略页] --> B[GET /api/strategy/saved<br/>列出已保存的智能体策略]
+    A[量化策略页] --> B[GET /api/strategy/saved<br/>列出已保存策略：智能体 / 自由构建]
     B --> C{操作}
     C -- 删除 --> D[DELETE /api/strategy/saved/id<br/>交易任务里的失效引用自动置空]
+    C -- 编辑自由构建 --> Q[跳转 /strategy/builder/id<br/>载入画布继续编辑]
     C -- 回测 --> E[选择回测标的 / 区间 / 框架]
     E --> F[POST /api/strategy/backtest]
     F --> G[展示指标与净值曲线<br/>总收益 / 年化 / 最大回撤 / 夏普 / CVaR / 胜率]
@@ -563,11 +577,39 @@ flowchart TD
     J -- 删除 --> P[DELETE /api/quant-tasks/id]
 ```
 
-> 策略的新增入口只在智能体页（生成后点「保存到我的量化策略」），量化策略页仅支持删除与回测。
+> 策略有两个新增入口：智能体页（自然语言生成后点「保存到我的量化策略」）与自由构建页（拖拽画布搭建后保存）；量化策略页支持删除、回测，自由构建策略还可点编辑回到画布。两类策略共用 `saved_strategies` 表，以 `engine_id` 区分（`builder` 为自由构建，其余为内置引擎），回测时按 `engine_id` 路由到对应信号生成逻辑。
 >
 > 删除已保存的策略或账户时，交易任务里的对应引用会被置空（`_scrub_task_refs` 把 `strategy_id` / `account_id` 置 NULL）；自动交易开关按「标的 + 策略 + 账户三者齐备」校验，引用缺失即无法开启，避免出现「自动交易开着却没有策略 / 账户」的状态；智能体页历史消息上的「已保存」标记也会在再次进入该页时自动失效，可重新保存。
 >
 > 账户资金不由用户手填：创建时为 0，连接测试成功后由连接器层自动读取回填（模拟盘固定 1,000,000，实盘经平台适配器拉取）。账户的登录凭证（登录账号 / 密码）与账户本体分离存入 `account_credentials`，密码经 Fernet 加密，接口响应只回显登录账号与 `hasPassword` 标记，永不返回密码。
+
+### 7.1 自由构建画布（Strategy Builder）
+
+```mermaid
+flowchart TD
+    A[自由构建页 /strategy/builder] --> B{起点}
+    B -- 空白画布 --> C[从左侧拖拽 / 点击添加节点<br/>数据源 / 指标 / 条件 / 逻辑 / 动作]
+    B -- 载入模板 --> D[双均线 / MACD 零轴上金叉 / RSI 超卖反转]
+    B -- 编辑已保存 --> E[GET /api/strategy/saved<br/>按 id 取 builder 图并还原画布]
+    C --> F[端口连线<br/>数值序列 / 布尔信号同类才相连]
+    D --> F
+    E --> F
+    F --> G[右侧面板编辑节点参数]
+    G --> H[POST /api/strategy/builder/validate]
+    H --> I{校验通过?}
+    I -- 否 --> J[返回错误列表<br/>定位到节点并高亮]
+    J --> G
+    I -- 是 --> K[生成规则文本 + 伪代码预览]
+    K --> L{保存}
+    L -- 新建 --> M[POST /api/strategy/saved<br/>engineId=builder, params=图 DSL]
+    L -- 编辑 --> N[PUT /api/strategy/saved/id<br/>重新校验并再生成规则]
+    M --> O{保存并回测?}
+    N --> O
+    O -- 是 --> P[跳量化策略页 focus=该策略<br/>POST /api/strategy/backtest]
+    O -- 否 --> Q[留在画布继续编辑]
+```
+
+> 图是纯数据 DSL（`{version, nodes, edges}`），节点类型走后端白名单、参数做范围校验，求值只调用内置指标函数（`indicators.py`），不 `eval` 任何用户输入。校验覆盖：缺 id / id 重复、未知类型、参数越界、MACD 快线≥慢线、端口不存在 / 类型不匹配 / 重复连线 / 未连线、缺买入或卖出信号、连线成环。`compile_signals` 先拓扑排序整段算好指标序列，再逐 bar 求值条件，指标预热期（`None`）视为条件不成立、买入优先于卖出，语义与内置引擎对齐（双均线模板回测结果与内置 `ma_cross` 完全一致）。
 
 ## API 概览
 
@@ -587,8 +629,10 @@ flowchart TD
 | POST | `/api/agent/recommend` | 智能荐股（非流式，body 传 `prefsId`） |
 | POST | `/api/agent/generate-strategy` | 策略生成智能体（非流式） |
 | GET | `/api/strategy/frameworks` | 回测框架列表 |
-| POST | `/api/strategy/backtest` | 执行回测 |
-| GET/POST | `/api/strategy/saved` | 已保存策略列表 / 保存策略 |
+| POST | `/api/strategy/backtest` | 执行回测（内置引擎 / 自由构建图按 `strategyId` 路由） |
+| POST | `/api/strategy/builder/validate` | 自由构建画布校验（返回错误列表，通过时附规则文本与伪代码） |
+| GET/POST | `/api/strategy/saved` | 已保存策略列表 / 保存策略（`engineId=builder` 时存图 DSL 并再生成规则） |
+| PUT | `/api/strategy/saved/{id}` | 编辑已保存策略（名称 / 参数，builder 策略重新校验） |
 | DELETE | `/api/strategy/saved/{id}` | 删除已保存策略 |
 | GET/POST | `/api/watchlist` | 自选股列表 / 加入自选 |
 | DELETE | `/api/watchlist/{code}` | 移除自选 |
@@ -679,6 +723,9 @@ flowchart TD
 | vue | ^3.4.38 | 前端框架 |
 | vue-router | ^4.4.3 | 前端路由 |
 | echarts | ^5.5.1 | 图表（K 线、净值曲线等） |
+| @vue-flow/core | ^1.48.2 | 自由构建拖拽画布（节点 / 连线 / 端口校验） |
+| @vue-flow/background | ^1.3.2 | 画布网格背景 |
+| @vue-flow/controls | ^1.1.3 | 画布缩放 / 适配控件 |
 | vite | ^5.4.8 | 构建工具 / 开发服务器（devDependency） |
 | @vitejs/plugin-vue | ^5.1.3 | Vue 单文件组件编译（devDependency） |
 

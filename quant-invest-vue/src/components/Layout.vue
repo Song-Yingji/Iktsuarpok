@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useApp } from '../store/app'
 import { resetAgentState } from '../store/agent'
 import { fmt, tone } from '../lib/utils'
@@ -15,6 +15,7 @@ const NAV = [
   { section: '智能量化' },
   { to: '/agents', icon: 'agent', label: 'AI 智能体' },
   { to: '/strategy', icon: 'strategy', label: '量化策略' },
+  { to: '/strategy/builder', icon: 'sliders', label: '自由构建' },
   { to: '/accounts', icon: 'account', label: '账户管理' },
   { to: '/quant-trade', icon: 'chart', label: '量化交易' },
   { section: '个人' },
@@ -23,6 +24,7 @@ const NAV = [
 
 const { user, toasts, logout, market } = useApp()
 const router = useRouter()
+const route = useRoute()
 
 const items = computed(() => [...market.value.indices, ...market.value.stocks.slice(0, 8)])
 const dupItems = computed(() => [...items.value, ...items.value])
@@ -53,7 +55,7 @@ function doLogout() {
             v-else
             :to="n.to"
             class="nav-item"
-            active-class="active"
+            :class="{ active: route.path === n.to }"
           >
             <Icon :name="n.icon" :size="17" />
             <span>{{ n.label }}</span>
