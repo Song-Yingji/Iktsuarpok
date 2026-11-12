@@ -4,11 +4,12 @@ import json
 import re
 
 from fastapi import APIRouter, Body, Depends
+from fastapi.responses import StreamingResponse
 
+import agent_core
 import db
 import llm
-import modular_rag
-import rag
+import prompts
 from common import _clamp_int, get_current_user
 from data import DEFAULT_PREFS, get_market
 from routers.prefs import _row_to_prefset
@@ -51,44 +52,6 @@ def _factor_line(s):
         f'｜PE:{s.get("pe", "--")}｜MA5:{_fmt(_ma(5))}｜MA20:{_fmt(_ma(20))}｜MA60:{_fmt(_ma(60))}'
         f'｜20日涨幅:{_fmt(_chg(20), "%")}｜60日位置:{_fmt(pos60, "%", 0)}｜20日年化波动:{_fmt(vol20, "%", 0)}'
     )
-
-
-def _parse_strategy(text):
-    """解析模型输出的策略 JSON，对常见畸形做容错。
-
-    小模型容易产出两类非法 JSON：字符串值里含真实换行、数组/对象括号写错。
-    标准解析失败时退化为按字段正则提取，保证仍能拿到可保存的策略。
-    """
-    try:
-        return json.loads(text, strict=False)
-    except json.JSONDecodeError:
-        pass
-
-    def pick_str(key):
-        m = re.search(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"' % key, text, re.S)
-        return m.group(1) if m else None
-
-    name = pick_str('name')
-    if not name:
-        return None
-
-    rules_m = re.search(r'"rules"\s*:\s*\[(.*?)(?:"code"|\]|$)', text, re.S)
-    rules = re.findall(r'"((?:[^"\\]|\\.)*)"', rules_m.group(1)) if rules_m else []
-
-    params_m = re.search(r'"params"\s*:\s*\{(.*?)\}', text, re.S)
-    params = {}
-    if params_m:
-        for k, v in re.findall(r'"([A-Za-z_]\w*)"\s*:\s*(-?\d+(?:\.\d+)?)', params_m.group(1)):
-            params[k] = float(v) if '.' in v else int(v)
-
-    return {
-        'name': name,
-        'type': pick_str('type') or '自定义策略',
-        'engineId': pick_str('engineId') or 'ma_cross',
-        'params': params,
-        'rules': rules,
-        'code': pick_str('code') or '',
-    }
 
 
 def _parse_recommend(text, pool):
@@ -169,75 +132,36 @@ def _split_tagged(text, start_tag, end_tag, parse):
     return text, None
 
 
-def _rag_context(query):
-    """检索本地知识库，返回（拼接好的参考资料文本, 命中片段列表）。
-
-    走模块化 RAG 管线（查询改写→多路检索→RRF 融合→重排序→上下文压缩），
-    知识库为空、未配置向量模型或检索失败时返回空串，静默降级为普通对话，
-    保证 RAG 不可用不影响策略生成主流程。
-    """
-    if not (query or '').strip():
-        return '', []
-    try:
-        hits = modular_rag.get_modular_rag().retrieve(query)
-    except rag.RagError:
-        return '', []
-    except Exception as e:
-        print(f'[warn] 模块化 RAG 检索失败：{e}')
-        return '', []
-    if not hits:
-        return '', []
-
-    blocks = [
-        f'[{i + 1}] 来源《{h["docName"]}》（相似度 {h["score"]:.2f}）\n{h["text"]}'
-        for i, h in enumerate(hits)
-    ]
-    return '## 参考资料（来自本地知识库，请优先依据以下内容回答）\n' + '\n\n'.join(blocks), hits
-
-
 @router.post('/generate-strategy')
-async def agent_generate_strategy(payload: dict = Body(default=None)):
-    """策略生成智能体（非流式，带 RAG 检索增强）。
+def agent_generate_strategy(payload: dict = Body(default=None), uid: int = Depends(get_current_user)):
+    """策略生成智能体入口（真 Agent：意图识别 → 闲聊直连 / 知识问答 / ReAct 工具 / 迭代研究循环）。
 
-    请求体：
-        messages: [{role: 'user'|'assistant', content: '...'}, ...]  多轮对话
-        或兼容旧格式：{ prompt: '...' }
-
-    检索增强：把用户最新提问向量化，在本地知识库中做相似度检索，命中片段与
-    原始问题拼成新的用户消息，再和 llm.SYSTEM_PROMPT 一起交给大模型。
-    知识库为空或不可用时静默降级为普通对话，不影响原有功能。
-
-    响应（JSON）：
-        { rag: {count, sources}, text, strategy }
-        rag      本轮命中的知识库来源
-        text     除策略 JSON 之外的说明文本
-        strategy 解析出的策略对象（未生成时为 null）
+    以 SSE（text/event-stream）流式返回，事件依次为：
+        intent   {intent, reason}
+        trace    {trace: [...]}   累积快照，前端直接替换
+        rag      {count, sources}
+        text     "增量文本"        闲聊 / 知识问答逐 token；工具 / 策略为整段
+        strategy {...}            策略卡片（研究循环每轮刷新最优）
+        done     {}
+    生成器为同步 def，由 Starlette 在线程池迭代，长耗时 LLM / 回测不阻塞事件循环。
     """
     p = payload or {}
-    messages = p.get('messages')
-    if not messages:
-        # 兼容旧格式：单条 prompt
-        messages = [{'role': 'user', 'content': p.get('prompt') or ''}]
+    messages = p.get('messages') or [{'role': 'user', 'content': p.get('prompt') or ''}]
 
-    msgs = [dict(m) for m in messages]
-    hits = []
-    if msgs and msgs[-1].get('role') == 'user':
-        context, hits = _rag_context(msgs[-1].get('content') or '')
-        if context:
-            msgs[-1]['content'] = f'{context}\n\n## 我的问题\n{msgs[-1]["content"]}'
+    def sse():
+        try:
+            for event, data in agent_core.run_agent_stream(messages, uid):
+                yield f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
+        except Exception as e:
+            print(f'[warn] 智能体流式执行失败：{e}')
+            payload = json.dumps({'message': '抱歉，我这边出了点状况，请稍后再问我一次。'}, ensure_ascii=False)
+            yield f'event: error\ndata: {payload}\n\n'
 
-    answer = llm.chat(msgs, system_prompt=llm.SYSTEM_PROMPT)
-    if not answer.strip():
-        answer = '系统繁忙，请稍后重试'
-    text, strategy = _split_tagged(answer, llm.STRATEGY_START, llm.STRATEGY_END, _parse_strategy)
-    return {
-        'rag': {
-            'count': len(hits),
-            'sources': [{'docName': h['docName'], 'score': round(h['score'], 3)} for h in hits],
-        },
-        'text': text,
-        'strategy': strategy,
-    }
+    return StreamingResponse(sse(), media_type='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',   # 关闭 nginx 缓冲，保证逐事件下发
+        'Connection': 'keep-alive',
+    })
 
 
 def _load_prefs(uid, pref_id=None):
@@ -280,21 +204,9 @@ async def agent_recommend(payload: dict = Body(default=None), uid: int = Depends
         pool = list(stocks)
 
     table = '\n'.join(_factor_line(s) for s in pool)
-    user_msg = f'''请从下面的候选池中选出最值得关注的 3~6 只标的，给出评分与理由。
+    user_msg = prompts.build_recommend_user(prefs, sectors, len(pool), table)
 
-## 我的投资偏好
-- 风险等级：{prefs.get('risk') or '未设置'}
-- 持仓周期：{prefs.get('horizon') or '未设置'}
-- 关注板块：{'、'.join(sectors) if sectors else '不限'}
-- 止损 / 止盈：{prefs.get('stopLoss', '--')}% / {prefs.get('takeProfit', '--')}%
-- 最大单票仓位：{prefs.get('maxPosition', '--')}%
-
-## 候选标的实时行情与技术因子（共 {len(pool)} 只）
-{table}
-
-请先输出一两句简短的分析说明，然后按约定格式输出荐股 JSON。'''
-
-    answer = llm.chat([{'role': 'user', 'content': user_msg}], system_prompt=llm.RECOMMEND_SYSTEM_PROMPT)
+    answer = llm.chat([{'role': 'user', 'content': user_msg}], system_prompt=prompts.RECOMMEND_SYSTEM_PROMPT)
     if not answer.strip():
         answer = '系统繁忙，请稍后重试'
     text, recommend = _split_tagged(answer, llm.RECOMMEND_START, llm.RECOMMEND_END,

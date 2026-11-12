@@ -16,8 +16,7 @@ venv/
 # 数据库连接配置（含密码，勿提交）
 db_config.py
 
-# 大模型 API 配置（含 API Key，勿提交）
-llm_config.py
+# 大模型密钥与私有地址放 .env（已忽略）；llm_config.py 已脱敏、可提交
 
 # 历史行情本地缓存（运行时自动生成，勿提交）
 _history_cache.json

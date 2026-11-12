@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import llm as native_llm
 import modular_rag
+import prompts
 import rag
 
 from llama_index.core.base.llms.types import CompletionResponse, LLMMetadata
@@ -113,14 +114,7 @@ def _generate_dataset_with_retry(generator: RagDatasetGenerator, attempts: int =
     raise RuntimeError(f'评测集合成失败：缺少 NLTK 语料（{last}）') from last
 
 
-# 出题指令：知识库与检索链路均以中文为主，强制用中文出题，
-# 避免英文合成问题在中文语义检索/自反思判定中被整体丢弃。
-_QUESTION_GEN_QUERY = (
-    '你是一名出题人，即将为一次测验出题。'
-    '请仅根据给定的文档内容，提出 1 个问题，问题类型要多样，'
-    '并且严格限制在给定上下文信息范围内。必须用中文提问。'
-)
-# 合成策略版本：出题方式变化时旧缓存自动失效
+# 合成策略版本：出题方式变化时旧缓存自动失效（出题指令见 prompts.QUESTION_GEN_QUERY）
 _GEN_VERSION = 'zh-v1'
 
 
@@ -206,7 +200,7 @@ def build_dataset(num_questions: int = 10, regenerate: bool = False,
         nodes=sampled,
         llm=judge,
         num_questions_per_chunk=1,
-        question_gen_query=_QUESTION_GEN_QUERY,
+        question_gen_query=prompts.QUESTION_GEN_QUERY,
         show_progress=False,
         workers=1,
     )

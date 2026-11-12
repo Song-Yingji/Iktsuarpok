@@ -148,27 +148,131 @@ function postOnce(path, body, { onData, onError } = {}) {
   return () => controller.abort()
 }
 
+/**
+ * 读取 SSE 流：按空行切分事件，解析 event/data 后分发。
+ * POST 带 body，不能用 EventSource（仅支持 GET），故用 fetch + ReadableStream。
+ * @returns {Function} 取消函数
+ */
+function postSSE(path, body, onEvent, onError) {
+  const token = localStorage.getItem('quant_token')
+  const controller = new AbortController()
+
+  ;(async () => {
+    let res
+    try {
+      res = await fetch(BASE_URL + path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: 'Bearer ' + token } : {})
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+    } catch (e) {
+      if (e.name === 'AbortError') return
+      onError?.(new Error('无法连接后端服务，请确认服务已启动'))
+      return
+    }
+    if (!res.ok) {
+      if (res.status === 401) {
+        localStorage.removeItem('quant_token')
+        localStorage.removeItem('quant_user')
+        location.href = '/login'
+      }
+      const data = await res.json().catch(() => ({}))
+      onError?.(new Error(data.message || `请求失败 (${res.status})`))
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buf = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buf.search(/\r?\n\r?\n/)) >= 0) {
+          const chunk = buf.slice(0, sep)
+          buf = buf.slice(sep).replace(/^\r?\n\r?\n/, '')
+          let event = 'message'
+          let dataStr = ''
+          for (const line of chunk.split(/\r?\n/)) {
+            if (line.startsWith('event:')) event = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataStr += line.slice(5).replace(/^ /, '')
+          }
+          if (!dataStr) continue
+          let data
+          try {
+            data = JSON.parse(dataStr)
+          } catch {
+            continue
+          }
+          onEvent(event, data)
+        }
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') return
+      onError?.(e instanceof Error ? e : new Error(String(e)))
+      return
+    }
+    onEvent('done', {})
+  })()
+
+  return () => controller.abort()
+}
+
 export const agentApi = {
   /**
-   * 策略生成智能体（非流式对话）
+   * 策略生成智能体（SSE 流式对话）
    * @param {Array} messages - 对话历史 [{role: 'user'|'assistant', content: '...'}, ...]
    * @param {Object} h - 结果回调
-   * @param {Function} h.onText - 说明文本 (text) => void
+   * @param {Function} h.onText - 说明文本增量 (chunk) => void
    * @param {Function} h.onRag - 知识库检索命中 ({count, sources}) => void
    * @param {Function} h.onStrategy - 策略生成 (strategy) => void
+   * @param {Function} h.onIntent - 意图识别结果 ('chat'|'knowledge'|'tool'|'strategy') => void
+   * @param {Function} h.onTrace - 思考过程累积快照 (trace[]) => void
    * @param {Function} h.onDone - 结束 () => void
    * @param {Function} h.onError - 错误 (err) => void
    * @returns {Function} 取消函数
    */
   chatStream(messages, h = {}) {
-    return postOnce('/agent/generate-strategy', { messages }, {
-      onData(data) {
-        if (data.rag?.count) h.onRag?.(data.rag)
-        if (data.text) h.onText?.(data.text)
-        if (data.strategy) h.onStrategy?.(data.strategy)
-        h.onDone?.()
-      },
-      onError: (e) => h.onError?.(e)
+    let ended = false
+    const finish = () => {
+      if (ended) return
+      ended = true
+      h.onDone?.()
+    }
+    return postSSE('/agent/generate-strategy', { messages }, (event, data) => {
+      switch (event) {
+        case 'intent':
+          h.onIntent?.(data.intent)
+          break
+        case 'trace':
+          if (data.trace?.length) h.onTrace?.(data.trace)
+          break
+        case 'rag':
+          if (data.count) h.onRag?.(data)
+          break
+        case 'text':
+          if (data) h.onText?.(data)
+          break
+        case 'strategy':
+          h.onStrategy?.(data)
+          break
+        case 'error':
+          ended = true
+          h.onError?.(new Error(data.message || '智能体执行失败'))
+          break
+        case 'done':
+          finish()
+          break
+      }
+    }, (e) => {
+      ended = true
+      h.onError?.(e)
     })
   },
 

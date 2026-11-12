@@ -7,9 +7,11 @@ import { useAgentChat } from '../store/agent'
 
 const QUICK_PROMPTS = [
   '你好，介绍一下你自己',
-  '写一个 MACD 零轴上方金叉买入的策略',
-  '帮我做一个沪深300成分股的动量轮动策略',
-  '什么是量化交易？'
+  '什么是量化交易？',
+  '把贵州茅台加入自选',
+  '最近有哪些财经新闻？',
+  '分析宁德时代的走势',
+  '写一个 MACD 零轴上方金叉买入的策略'
 ]
 
 const router = useRouter()
@@ -32,6 +34,18 @@ function toggleRag(i) {
 function closeRag() {
   ragOpenId.value = null
 }
+
+// 思考过程浮层：同一时刻只展开一条消息的 trace
+const traceOpenId = ref(null)
+function toggleTrace(i) {
+  traceOpenId.value = traceOpenId.value === i ? null : i
+}
+const INTENT_LABEL = { chat: '闲聊', knowledge: '知识问答', tool: '工具调用', strategy: '策略研究' }
+const INTENT_TONE = { chat: 'info', knowledge: 'up', tool: 'warn', strategy: 'purple' }
+const intentLabel = (v) => INTENT_LABEL[v] || v || ''
+const intentTone = (v) => INTENT_TONE[v] || 'neutral'
+const fmtParams = (p) => JSON.stringify(p || {})
+const pct = (v, d = 1) => (v == null ? '--' : (v * 100).toFixed(d) + '%')
 
 onMounted(() => {
   scrollDown()
@@ -61,6 +75,31 @@ onBeforeUnmount(() => {
         <div v-for="(msg, i) in messages" :key="i" :class="['msg', msg.role]">
           <div class="msg-avatar">{{ msg.role === 'bot' ? 'AI' : '我' }}</div>
           <div class="msg-bubble">
+            <div v-if="msg.role === 'bot' && msg.trace && msg.trace.length" class="trace-box">
+              <button type="button" class="trace-toggle" @click="toggleTrace(i)">
+                <Icon name="agent" :size="13" />
+                <span>思考过程</span>
+                <Badge :tone="intentTone(msg.intent)">{{ intentLabel(msg.intent) }}</Badge>
+                <Icon :name="traceOpenId === i ? 'close' : 'plus'" :size="11" />
+              </button>
+              <div v-if="traceOpenId === i" class="trace-body">
+                <div v-for="(t, k) in msg.trace" :key="k" class="trace-step">
+                  <template v-if="t.type === 'intent'">识别意图：{{ intentLabel(t.intent) }}<span v-if="t.reason" class="trace-sub">（{{ t.reason }}）</span></template>
+                  <template v-else-if="t.type === 'chat'">闲聊模式，直连大模型</template>
+                  <template v-else-if="t.type === 'knowledge'">知识问答模式，检索本地知识库命中 {{ t.count }} 条，据参考资料回答</template>
+                  <template v-else-if="t.type === 'react'">
+                    <div class="trace-line">步 {{ t.step }} · {{ t.tool ? '调用 ' + t.tool : '汇总回答' }}</div>
+                    <div v-if="t.thought" class="trace-sub">思考：{{ t.thought }}</div>
+                    <div v-if="t.observation" class="trace-sub">观察：{{ t.observation }}</div>
+                  </template>
+                  <template v-else-if="t.type === 'research'">
+                    <div class="trace-line">轮 {{ t.round }} · {{ t.engine }} {{ fmtParams(t.params) }} → 奖励 {{ t.reward }}（{{ t.decision === 'stop' ? '收敛' : '继续迭代' }}）</div>
+                    <div v-if="t.rationale" class="trace-sub">假设：{{ t.rationale }}</div>
+                    <div v-if="t.metrics" class="trace-sub">年化 {{ pct(t.metrics.annualized) }} · 回撤 {{ pct(t.metrics.maxDD) }} · 夏普 {{ t.metrics.sharpe }} · 胜率 {{ pct(t.metrics.winRate, 0) }}</div>
+                  </template>
+                </div>
+              </div>
+            </div>
             <div v-if="msg.text" style="white-space: pre-wrap">{{ msg.text }}<span v-if="msg.typing" class="cursor-blink">▍</span></div>
 
             <div v-if="msg.strategy" class="strategy-card">
@@ -134,6 +173,36 @@ onBeforeUnmount(() => {
 @keyframes blink {
   50% { opacity: 0; }
 }
+.trace-box {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.trace-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.trace-toggle:hover { color: var(--text); background: var(--panel-2); }
+.trace-body {
+  padding: 4px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+}
+.trace-step { font-size: 12px; color: var(--text-2); line-height: 1.55; }
+.trace-line { font-weight: 600; color: var(--accent-2); }
+.trace-sub { display: block; color: var(--text-3); font-size: 11.5px; white-space: pre-wrap; }
 .strategy-card {
   margin-top: 12px;
   padding: 14px;

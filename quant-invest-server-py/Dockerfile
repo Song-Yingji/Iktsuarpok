@@ -12,8 +12,8 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
-# 再拷贝源码；db_config.py / llm_config.py 被 .dockerignore 排除，
-# 由 docker-entrypoint.sh 按环境变量在启动时生成
+# 再拷贝源码；db_config.py 被 .dockerignore 排除、由入口脚本按环境变量生成，
+# llm_config.py 已脱敏随源码打入镜像，启动时直接读 compose 注入的环境变量
 COPY . .
 
 # Windows 下检出的脚本可能带 CRLF，统一转成 LF 再赋可执行权限

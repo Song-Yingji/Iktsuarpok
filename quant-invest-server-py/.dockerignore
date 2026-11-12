@@ -2,9 +2,9 @@
 __pycache__/
 *.py[cod]
 
-# 连接与 API 配置（镜像内由 docker-entrypoint.sh 按环境变量生成）
+# 数据库连接配置（镜像内由 docker-entrypoint.sh 按环境变量生成）
+# llm_config.py 已脱敏可提交，需打进镜像（启动时读环境变量），故不在此忽略
 db_config.py
-llm_config.py
 
 # 运行时状态（镜像内重新生成）
 _history_cache.json

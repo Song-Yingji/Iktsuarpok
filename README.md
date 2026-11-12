@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **真实行情引擎**：24 只 A 股 + 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
-- **AI 策略生成（Quant Buffett）**：用自然语言描述投资想法，大模型一次性返回对话内容与结构化策略，可一键保存到「我的量化策略」；内置 RAG 检索增强，回答前先召回本地知识库片段
+- **AI 策略生成智能体（Quant Buffett）**：真正的 Agent 而非单次问答——先由大模型做意图识别，再分四路执行：闲聊直连大模型；量化 / 投资知识问答先检索本地知识库再据参考资料作答；查行情 / 走势 / 基本面 / 财经新闻、加删自选股等走 ReAct 工具循环（思考→调用→观察，最多 6 步）；描述投资想法则进入 R&D-Agent 式「假设→回测→反馈」迭代研究循环（最多 3 轮，ε-贪心多臂老虎机选引擎，按奖励收敛），产出可一键保存的结构化策略；内置工具含个股行情查询、自选股增删（重复添加会提示「股票已在自选股中」）、东方财富基本面、技术走势分析、财经新闻查询、RAG 检索；每条回答附「思考过程」面板展示意图判定与逐步 trace
 - **自由构建（Strategy Builder）**：拖拽式画布搭建策略——数据源 / 技术指标 / 条件判断 / 逻辑组合 / 交易动作五类节点连线成图，端口分数值序列与布尔信号、同类才能相连；保存前实时校验（缺连线 / 类型不匹配 / 成环 / 缺买卖信号等），通过后生成规则文本与伪代码预览，内置双均线 / MACD 零轴上金叉 / RSI 超卖反转三套模板，支持编辑已保存策略并一键回测；图以纯数据 DSL 存入 `saved_strategies`（`engine_id='builder'`），后端白名单求值、不执行任何用户代码
 - **AI 智能荐股（Recommend Buffett）**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
 - **向量知识库（RAG）**：独立后台管理页上传文档，经递归分块与本地 Ollama `qwen3-embedding` 向量化后写入本地 Chroma；策略生成时走模块化检索管线（查询改写 → 多路检索 → RRF 融合 → 重排序 → 上下文压缩）召回 Top-K 片段拼入提示词；可开启本地大模型 Self-RAG 分析（判定是否检索、内容是否有用）
@@ -28,7 +28,7 @@
 | 前端 | Vue 3 · Vite · Vue Router · ECharts · Vue Flow（自由构建画布） |
 | 后端 | Python · FastAPI · Uvicorn · PyMySQL |
 | 数据库 | MySQL 5.7+ |
-| 大模型 | OpenAI 兼容 API（目前是本地 Ollama `qwen3:0.6b` 可切换任意兼容模型）|
+| 大模型 | OpenAI 兼容 API（默认本地 Ollama `qwen3:0.6b`，经 `.env` 可切换任意云端 / 本地兼容模型）|
 | 向量知识库 | Chroma（本地持久化）· 本地 Ollama `qwen3-embedding:0.6b` 向量化（1024 维） |
 | 效果测评 | LlamaIndex（评测集合成 + Retriever / Faithfulness / Relevancy / Correctness 评估器） |
 | 部署 | Docker · Docker Compose（可选，见「Docker 部署」章节） |
@@ -54,7 +54,9 @@ Iktsuarpok/
 │   ├── modular_rag.py            # 模块化 RAG：查询改写 → 多路检索（向量 + BM25）→ RRF 融合 → 重排序 → 上下文压缩
 │   ├── rag_eval.py               # LlamaIndex 效果测评：评测集合成（缓存）+ 五项指标评估
 │   ├── llm.py                    # 大模型接入层（非流式调用 + 系统提示词）
-│   ├── llm_config.py             # 大模型 / 向量化模型 API 配置（已 gitignore，需自行创建）
+│   ├── agent_core.py             # 智能体编排：意图识别 → 闲聊直连 / ReAct 工具循环 / 迭代研究循环（含 trace）
+│   ├── agent_tools.py            # 智能体工具层：行情查询 / 自选增删 / 东方财富基本面 / 走势分析 / RAG 检索
+│   ├── llm_config.py             # 大模型 / 向量化模型配置（已脱敏可提交，从环境变量 / .env 读取密钥）
 │   ├── db_config.py              # 数据库连接配置（已 gitignore，需自行创建）
 │   ├── kb_store/                 # Chroma 向量库本地持久化目录（运行时自动生成，已 gitignore）
 │   ├── utils.py                  # 确定性伪随机工具
@@ -78,7 +80,8 @@ Iktsuarpok/
 │   └── .dockerignore             # 前端构建上下文忽略：node_modules / dist
 ├── .venv/                        # Python 虚拟环境（后端依赖安装于此，已 gitignore）
 ├── docker-compose.yml            # Docker 编排：mysql + backend + frontend 三服务
-├── .env                          # Docker 部署可选的端口 / 密钥 / 模型覆盖（已 gitignore）
+├── .env                          # 密钥 / 模型 / 端口配置（本地开发与 Docker 共用，已 gitignore）
+├── .env.example                  # .env 模板（可提交，占位值不含真实密钥）
 ├── database_schema.sql           # 数据库建库建表脚本
 ├── 一键启动量化系统.bat          # 一键启动前后端（Windows）
 └── 停止量化系统.bat              # 停止前后端服务
@@ -127,27 +130,24 @@ mysql -u root -p --default-character-set=utf8mb4 < database_schema.sql
 
 ### 3. 配置大模型与向量化模型
 
-在 `quant-invest-server-py/llm_config.py` 中填写配置。对话模型与向量化模型相互独立：
+密钥与模型地址统一放在项目根目录的 `.env`（已 gitignore，参考可提交的 `.env.example`）。`quant-invest-server-py/llm_config.py` 已脱敏、可提交，启动时自动读取环境变量 / `.env`，无需改代码。对话模型与向量化模型相互独立：
 
-```python
-# -*- coding: utf-8 -*-
-# ====== 对话模型（策略生成 / 智能荐股） ======
-# 默认使用本地 Ollama 的 qwen3:0.6b，无需联网、无需申请 token。
-# Ollama 不校验 API Key，API_KEY 填任意非空值即可（留空会回退为 'ollama'）。
-API_BASE_URL = 'https://your-endpoint/v1'
-API_KEY = 'ollama'
-MODEL_NAME = 'qwen3:0.6b'
+```bash
+# .env（复制 .env.example 后填写真实值；不要提交到版本库）
+# ====== 对话模型（智能体 / 智能荐股） ======
+LLM_API_BASE_URL=https://your-endpoint/v1   # 本地 Ollama 填 http://localhost:11434/v1
+LLM_API_KEY=sk-your-key                     # Ollama 不校验 Key，填任意非空值或留空
+LLM_MODEL_NAME=qwen3:0.6b
 
 # ====== 向量化模型（RAG 知识库专用） ======
-# 默认使用本地 Ollama 的 qwen3-embedding:0.6b（输出 1024 维向量），无需联网、无需申请 token。
-# Ollama 不校验 API Key，EMBED_API_KEY 填任意非空值即可（留空会回退为 'ollama'）。
-EMBED_BASE_URL = 'http://localhost:11434/v1'
-EMBED_API_KEY = 'ollama'
-EMBED_MODEL = 'qwen3-embedding:0.6b'
+EMBED_BASE_URL=http://localhost:11434/v1
+EMBED_API_KEY=ollama
+EMBED_MODEL=qwen3-embedding:0.6b
 ```
 
-> 可切换为任意 OpenAI 兼容服务（含本地 Ollama，`API_BASE_URL` 填 `http://localhost:11434/v1` 即可）。模型越小对长系统提示词的指令遵循越弱，建议使用 7B 以上模型以保证策略 JSON 的格式正确率。
+> 不创建 `.env` 时回落到本地 Ollama 默认值（`qwen3:0.6b` + `qwen3-embedding:0.6b`），开箱即用。可切换为任意 OpenAI 兼容服务。模型越小对长系统提示词的指令遵循越弱，智能体的意图识别 / ReAct / 研究循环建议使用 7B 以上模型以保证 JSON 格式正确率。
 > 向量化模型同理，任何兼容 `/embeddings` 接口的服务都可替换 `EMBED_BASE_URL` / `EMBED_MODEL`，例如阿里云百炼的 `text-embedding-v3`（同样 1024 维）；换模型后建议清空 `kb_store/` 重新建立索引，避免不同模型的向量混用。
+> Docker 部署复用同一组环境变量（见「Docker 部署」），compose 会把它们注入后端容器，`llm_config.py` 在容器内同样按环境变量生效。
 
 #### 本地向量模型准备（Ollama）
 
@@ -212,7 +212,7 @@ docker compose down -v           # 连同 MySQL 数据与向量知识库一起�
 | --- | --- |
 | `docker-compose.yml` | 编排 mysql / backend / frontend 三个服务；对外发布前端 `5189`、MySQL `3307`（避开本机已有的 3306）；backend 不对外发布端口，仅由 Nginx 反向代理访问；声明 `host.docker.internal:host-gateway` 让容器能访问宿主机服务 |
 | `quant-invest-server-py/Dockerfile` | 后端镜像：基于 `python:3.10-slim` 安装 `requirements.txt` 依赖，由入口脚本启动 |
-| `quant-invest-server-py/docker-entrypoint.sh` | 容器入口脚本：按环境变量生成 `db_config.py` / `llm_config.py`，再以 `0.0.0.0:3000` 启动 uvicorn |
+| `quant-invest-server-py/docker-entrypoint.sh` | 容器入口脚本：按环境变量生成 `db_config.py`（`llm_config.py` 已随镜像提交、直接读环境变量），再以 `0.0.0.0:3000` 启动 uvicorn |
 | `quant-invest-server-py/.dockerignore` | 后端构建上下文忽略：`.venv` / 配置文件 / 运行时缓存 |
 | `quant-invest-vue/Dockerfile` | 前端镜像：`node:22-alpine` 构建静态包 → `nginx:alpine` 托管 |
 | `quant-invest-vue/nginx.conf` | 静态资源与 SPA 路由回退，并把 `/api` 反向代理到 backend |
@@ -230,14 +230,16 @@ docker compose down -v           # 连同 MySQL 数据与向量知识库一起�
 | `XB_QUANT_SECRET` | `xb-quant-internal-secret` | 登录 token 的 HMAC 签名密钥 |
 | `CRED_SECRET_KEY` | 内置默认值 | 账户登录凭证的 Fernet 加密密钥；**务必固定**，否则重启后已存的凭证密文无法解密 |
 | `LLM_API_BASE_URL` | `http://host.docker.internal:11434/v1` | 对话模型地址 |
+| `LLM_API_KEY` | 空（Ollama 不校验） | 对话模型 API Key；云端服务必填 |
 | `LLM_MODEL_NAME` | `qwen3:0.6b` | 对话模型名 |
 | `EMBED_BASE_URL` | `http://host.docker.internal:11434/v1` | 向量化模型地址 |
+| `EMBED_API_KEY` | `ollama` | 向量化模型 API Key |
 | `EMBED_MODEL` | `qwen3-embedding:0.6b` | 向量化模型名 |
 
 ### 关键设计
 
 - **同源请求**：前端镜像构建时注入 `VITE_API_BASE=/api`，页面用相对路径请求、由 Nginx 代理到后端，因此换机器、换域名都不用改代码，浏览器侧也不会出现跨域。
-- **配置由入口脚本生成**：`db_config.py`、`llm_config.py` 是私人配置（已 gitignore、镜像内不存在），容器每次启动都会按环境变量重新生成；若要使用自定义配置，把同名文件挂载到容器 `/app` 即可（脚本检测到文件已存在就跳过生成）。
+- **配置来源**：`db_config.py` 是私人配置（已 gitignore、镜像内不存在），容器每次启动按环境变量重新生成，挂载同名文件到 `/app` 可覆盖；`llm_config.py` 已脱敏随镜像提交，启动时直接读环境变量 / `.env`，本地与容器共用同一组变量名，无需入口脚本生成。
 - **模型跑在宿主机**：容器内的 `127.0.0.1` 指容器自身，因此模型地址写 `host.docker.internal`（Docker Desktop 内置该别名并转发到宿主机 loopback，Ollama 只监听 `127.0.0.1:11434` 也能连上）；数据库则写服务名 `mysql`。
 - **数据持久化**：MySQL 数据（卷 `mysql-data`）与向量知识库 `kb_store/`（卷 `kb-store`）都在数据卷中，重建容器不丢。
 
@@ -323,6 +325,8 @@ graph TB
         ADMIN[admin_config.py 管理员固定账号]
         BACKTEST[backtest.py 回测引擎<br/>indicators.py 指标 + builder_engine.py 图信号]
         LLM[llm.py 大模型接入层]
+        AGENT[agent_core.py 智能体编排<br/>意图识别 / ReAct / 迭代研究循环]
+        TOOLS[agent_tools.py 工具层<br/>行情 / 自选 / 基本面 / 走势 / 新闻 / RAG]
         RAG[rag.py 向量知识库<br/>分块 / 向量化 / 检索]
         MODRAG[modular_rag.py 模块化检索管线<br/>改写 / 多路检索 / RRF 融合 / 重排 / 压缩]
         DATA[data.py 行情 / 新闻引擎]
@@ -334,6 +338,7 @@ graph TB
         BS[Baostock<br/>历史日 K 前复权]
         EQ[easyquotation<br/>实时快照 新浪源]
         CLS[财联社电报<br/>7×24 快讯]
+        EM[东方财富免费接口<br/>基本面快照]
         LLMS[大模型<br/>OpenAI 兼容 API]
         EMB[本地 Ollama qwen3-embedding<br/>1024 维向量化]
     end
@@ -349,6 +354,14 @@ graph TB
     ROUTES --> AUTH
     ROUTES --> BACKTEST
     ROUTES --> DB
+    ROUTES --> AGENT
+    AGENT --> LLM
+    AGENT --> TOOLS
+    AGENT --> BACKTEST
+    TOOLS --> MODRAG
+    TOOLS --> DATA
+    TOOLS --> DB
+    TOOLS --> EM
     BACKTEST --> DATA
     LLM --> LLMS
     RAG --> EMB
@@ -446,59 +459,83 @@ flowchart TD
 
 ### 5. AI 智能体：策略生成流程（Quant Buffett）
 
+后端 `agent_core.py` 先做意图识别，再按四路分发执行；`agent_tools.py` 提供白名单工具。全程非流式，一次请求返回 `{intent, trace, rag, text, strategy}`，前端把 `trace` 渲染成可展开的「思考过程」面板。
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as 用户
     participant V as StrategyAgent.vue
     participant S as store/agent.js
-    participant A as api/index.js
-    participant M as main.py
-    participant R as modular_rag.py 模块化管线
+    participant M as routers/agent.py
+    participant C as agent_core.py
+    participant T as agent_tools.py
     participant L as llm.py + 大模型
 
     U->>V: 输入消息并发送
-    V->>S: send(text)
-    S->>S: 追加用户消息 + 空的 bot 占位消息
-    S->>S: buildHistory 过滤欢迎语 / 空消息<br/>策略消息转为摘要文本
-    S->>A: chatStream(history, handlers)
-    A->>M: POST /api/agent/generate-strategy
-    M->>R: 模块化管线检索<br/>改写 / 多路检索 / RRF 融合 / 重排
-    R-->>M: 命中片段（含相似度）
-    M->>M: 片段与原始问题拼成新的用户消息
-    M->>L: chat(拼接后的 messages) 非流式请求
-    L-->>M: 完整回答文本
-    M->>M: 按标记切分说明文本与策略 JSON 并解析
-    M-->>A: 返回 JSON（rag + text + strategy）
-    A-->>S: onRag / onText / onStrategy 回调
-    S->>V: 一次性渲染检索图标、说明文本与策略卡片
-    A-->>S: onDone
-    S->>V: typing = false
+    V->>S: send(text) → buildHistory
+    S->>M: POST /api/agent/generate-strategy
+    M->>C: run_agent(messages, uid)
+    C->>L: 意图识别（INTENT_PROMPT）
+    L-->>C: {intent: chat|knowledge|tool|strategy, reason}
+    alt intent = chat（闲聊）
+        C->>L: 注入闲聊提示词直连大模型
+        L-->>C: 回答文本
+    else intent = knowledge（知识问答）
+        C->>T: rag_search 召回知识库片段
+        C->>L: 参考资料 + 知识问答提示词 → 回答
+        L-->>C: 回答文本（标注来源）
+    else intent = tool（工具调用）
+        loop ReAct ≤6 步
+            C->>L: Thought → Action{tool,args}
+            C->>T: run_tool(name,args,ctx)
+            T-->>C: Observation（结果摘要）
+        end
+        C->>L: 汇总 final_answer
+    else intent = strategy（策略研究）
+        C->>T: rag_search 召回知识库片段
+        loop 研究循环 ≤3 轮（ε-贪心选引擎）
+            C->>L: 提出假设（engine+params+rationale）
+            C->>C: run_backtest 真实历史回测 → 奖励
+            C->>C: 反馈注入下一轮 / 达标即收敛
+        end
+        C->>C: 选出奖励最高的一轮作为最终策略
+    end
+    C-->>M: {intent, trace, rag, text, strategy}
+    M-->>S: JSON → onIntent/onTrace/onRag/onText/onStrategy
+    S->>V: 渲染意图徽标 + 思考过程 + 文本 / 策略卡片
     U->>V: 点击「保存到我的量化策略」
-    V->>S: saveStrategy(msg)
-    S->>M: POST /api/strategy/saved
-    S->>V: 提示已保存
+    V->>S: saveStrategy → POST /api/strategy/saved
 ```
 
-> 知识库为空、未配置向量模型或检索失败时，后端响应中 `rag.count` 为 0 且直接跳过检索，策略生成照常进行，RAG 不可用不影响主流程。
+> 知识库为空、未配置向量模型或检索失败时 `rag.count` 为 0 并静默跳过，不影响主流程。RAG 仅作为检索工具被调用，不改变后台「模块设置」里配置好的检索管线。
 
-#### 5.1 后端标记切分与解析
+#### 5.1 意图识别与四路分发
 
-模型可能在一次回复里混合「闲聊文字」与「策略 JSON」，后端用 `===STRATEGY_JSON===` / `===END_STRATEGY===` 两个标记把两者切开：标记之外的部分作为说明文本返回，标记之内的 JSON 解析为结构化策略对象；未命中标记或解析失败时整段文本作为说明文本返回、策略字段为 `null`。
+`classify_intent` 用 `INTENT_PROMPT` 让大模型输出 `{intent, reason}`（`chat` / `knowledge` / `tool` / `strategy`），解析失败时回落到关键词规则 `_rule_intent`。四路各自独立：闲聊注入 `CHAT_PROMPT` 直连大模型；知识问答走 `run_knowledge`；工具走 ReAct；策略走迭代研究循环。意图判定理由与后续每一步都会写入 `trace`，供前端「思考过程」面板展示。
 
-```mermaid
-flowchart LR
-    A[完整回答文本] --> B{存在开始与结束标记?}
-    B -- 否 --> F[整段作为说明文本<br/>strategy 为 null]
-    B -- 是 --> C[提取标记内 JSON 并解析]
-    C --> D{解析成功?}
-    D -- 否 --> F
-    D -- 是 --> E[返回 说明文本 + 策略对象]
-```
+量化 / 投资知识性问题（如「什么是夏普比率」「MACD 怎么用」）不算闲聊：`run_knowledge` 先调 `rag_search` 召回本地知识库片段，把片段作为「参考资料」附在 `KNOWLEDGE_PROMPT` 末尾再交给大模型，要求优先依据参考资料作答并用《文档名》标注来源；命中条数计入 `rag.count`（气泡外显示检索图标），未命中时模型结合自身知识补充并说明。
 
-解析策略时先按标准 JSON 解析（`strict=False`，容忍字符串内真实换行），失败再按字段正则兜底提取，保证小模型输出的畸形 JSON 也能落成可保存的策略。
+#### 5.2 ReAct 工具循环（intent = tool）
 
-#### 5.2 智能体状态生命周期
+系统提示词列出 `agent_tools.py` 的白名单工具，模型每步输出 `{thought, action:{tool,args}}` 或 `{thought, final_answer}`；后端执行工具并把结果摘要作为 Observation 追加回对话，最多 6 步。工具包括：
+
+| 工具 | 能力 | 数据尺度 |
+| --- | --- | --- |
+| `query_stock` | 个股实时快照 + 指定日期区间 / 最近 N 天日 K + 区间统计 | 日 OHLCV ≤240 天 + 实时快照 |
+| `add_watchlist` / `remove_watchlist` | 自选股增删（数据库操作，按当前登录用户）；重复添加返回「股票已在自选股中」 | MySQL `watchlist` 表 |
+| `fundamentals` | 基本面分析（联网） | 东方财富免费接口：PE/PB/市值/ROE/营收利润等 |
+| `analyze_trend` | 技术走势分析 | MA5/20/60、RSI14、MACD、20 日波动率、60 日位置、支撑压力 |
+| `query_news` | 财经新闻快讯查询，支持关键词 / 分类 / 条数过滤 | 财联社电报内存缓存（含分类与情绪标签） |
+| `rag_search` | 仅检索本地知识库 | 复用模块化 RAG 管线，不改配置 |
+
+> 生成策略不作为 ReAct 工具暴露——它是 `strategy` 意图专属的研究循环，避免模型在工具循环里随意拼策略。
+
+#### 5.3 迭代研究循环（intent = strategy，R&D-Agent 式）
+
+先 `rag_search` 召回参考片段，再进入「假设→回测→反馈」循环（最多 3 轮）：每轮用 ε-贪心多臂老虎机（ε=0.3）在内置引擎（双均线 / MACD / RSI / 布林 / 动量）间探索或利用，给出 `engine_hint`；大模型据此提出假设（引擎 + 参数 + 理由），参数经 `_clamp_params` 约束到合法区间后调用 `run_backtest` 在真实历史行情上回测；按 `奖励 = 0.4·年化 + 0.3·夏普/3 + 0.2·(1+最大回撤) + 0.1·胜率` 打分，把上一轮指标作为反馈注入下一轮假设。奖励 ≥0.55 提前收敛，否则跑满 3 轮，取奖励最高的一轮产出结构化策略（`engineId + params`，不执行模型代码）。每轮的引擎 / 参数 / 奖励 / 决策 / 假设 / 指标都记入 `trace`。
+
+#### 5.4 智能体状态生命周期
 
 聊天记录、荐股结果提升到模块级 store，路由切换不丢失：
 
@@ -535,7 +572,7 @@ flowchart TD
 
 > 文档切块采用递归分块策略：优先按段落切，仍超长则依次降级到换行、中英文句读（`。！？；，、` 等）、空白，全部降级完仍超长才按字符硬切；过短的碎片会与相邻块合并，并给每块加上相邻 80 字重叠，避免语义被切断。
 
-#### 6.2 策略生成时的 RAG 检索
+#### 6.2 智能体调用 RAG 检索
 
 ```mermaid
 flowchart LR
@@ -545,12 +582,12 @@ flowchart LR
     D --> E[重排序<br/>分词 + 词语重叠 + 短语匹配]
     E --> F[上下文压缩<br/>保留最相关句子，可选]
     F --> G[召回 Top-K 片段<br/>默认 4 条]
-    G --> H[命中片段拼成「参考资料」<br/>与原始问题组成新的用户消息]
-    H --> I[新提示词 + 系统提示词<br/>一起交给大模型]
-    I --> J[一次性返回回答与结构化策略]
+    G --> H[命中片段作为参考资料<br/>返回给调用方]
+    H --> I[知识问答：参考资料注入提示词<br/>ReAct：rag_search 工具的 Observation<br/>研究循环：首轮检索上下文]
+    I --> J[片段注入提示词<br/>辅助回答 / 策略假设]
 ```
 
-> 检索由 `modular_rag.py` 的模块化管线完成：向量检索复用 Chroma（qwen3-embedding 余弦相似度），BM25 关键词检索基于 jieba + rank_bm25 对全库分块建索引，二者经 RRF 融合后做重排序与（可选的）上下文压缩。各模块由配置开关编排，知识库为空或检索失败时静默跳过、响应中 `rag.count` 为 0，策略生成照常进行。开启「本地大模型分析（Self-RAG）」后，检索前后会各调用一次本地大模型（非流式 `llm.chat`）做判定：判定无需检索时直接返回 0 条、判定检索内容无用时不注入，从而过滤与问题无关的知识库噪声。检索到的片段以「## 参考资料（来自本地知识库，请优先依据以下内容回答）」的形式前置在用户问题之前，原问题保留在「## 我的问题」段落下，二者与代码里的系统提示词一起送入大模型。命中时会在该条回答的气泡外右下角出现一个检索图标（底部与气泡齐平），点击后浮层在图标右侧单行展开「已检索本地知识库，命中 N 条参考片段」，点击空白处或发起新操作会自动收起，未命中则不显示图标。
+> 检索由 `modular_rag.py` 的模块化管线完成：向量检索复用 Chroma（qwen3-embedding 余弦相似度），BM25 关键词检索基于 jieba + rank_bm25 对全库分块建索引，二者经 RRF 融合后做重排序与（可选的）上下文压缩。各模块由配置开关编排，知识库为空或检索失败时静默跳过、响应中 `rag.count` 为 0，策略生成照常进行。开启「本地大模型分析（Self-RAG）」后，检索前后会各调用一次本地大模型（非流式 `llm.chat`）做判定：判定无需检索时直接返回 0 条、判定检索内容无用时不注入，从而过滤与问题无关的知识库噪声。检索到的片段以「参考资料」形式注入调用方提示词：ReAct 路由下由 `rag_search` 工具按需检索、片段作为 Observation 回灌；策略研究路由下在循环开始前先检索一次、片段作为研究上下文。智能体只调用检索、不修改后台配置好的管线。命中时会在该条回答的气泡外右下角出现一个检索图标（底部与气泡齐平），点击后浮层在图标右侧单行展开「已检索本地知识库，命中 N 条参考片段」，点击空白处或发起新操作会自动收起，未命中则不显示图标。
 
 #### 6.3 效果测评（LlamaIndex）
 
@@ -627,7 +664,7 @@ flowchart TD
 | DELETE | `/api/prefs/{id}` | 删除偏好（删默认时自动补选一套） |
 | GET/POST | `/api/settings` | 交易提醒开关（与偏好无关，不参与荐股提示词） |
 | POST | `/api/agent/recommend` | 智能荐股（非流式，body 传 `prefsId`） |
-| POST | `/api/agent/generate-strategy` | 策略生成智能体（非流式） |
+| POST | `/api/agent/generate-strategy` | 策略生成智能体（非流式；意图识别 → 闲聊 / ReAct / 研究循环，返回 intent + trace） |
 | GET | `/api/strategy/frameworks` | 回测框架列表 |
 | POST | `/api/strategy/backtest` | 执行回测（内置引擎 / 自由构建图按 `strategyId` 路由） |
 | POST | `/api/strategy/builder/validate` | 自由构建画布校验（返回错误列表，通过时附规则文本与伪代码） |
@@ -665,19 +702,21 @@ flowchart TD
 
 ### 策略生成接口的响应格式
 
-`POST /api/agent/generate-strategy` 请求体为 `{ messages: [{role, content}, ...] }`，响应为 JSON：
+`POST /api/agent/generate-strategy` 请求体为 `{ messages: [{role, content}, ...] }`（需登录），响应为 JSON：
 
 ```json
 {
+  "intent": "chat | knowledge | tool | strategy",
+  "trace": { "intent": "...", "reason": "...", "mode": "...", "steps": [], "rounds": [] },
   "rag": { "count": 2, "sources": [{ "docName": "...", "score": 0.812 }] },
   "text": "说明文本",
   "strategy": { "name": "...", "engineId": "...", "params": {}, "rules": [], "code": "..." }
 }
 ```
 
-后端先对最新一条用户提问做知识库检索，命中时把片段拼进该条消息，并把命中条数放回 `rag`；前端只据此在气泡外右下角显示一个检索图标（点击可查看命中条数）。知识库为空或不可用时 `rag.count` 为 0，不做任何注入，也不显示图标。
+`intent` 为意图识别结果；`trace` 记录判定理由与执行过程——`knowledge` 路由为检索命中条数，`tool` 路由为 `steps`（每步 thought / tool / args / observation），`strategy` 路由为 `rounds`（每轮 engine / params / reward / decision / rationale / metrics），前端渲染成「思考过程」面板。`rag` 仅在检索命中时非零（知识问答检索、ReAct 的 `rag_search` 或研究循环首轮检索），前端据此在气泡外右下角显示检索图标。知识库为空或不可用时 `rag.count` 为 0，不显示图标。
 
-后端用 `===STRATEGY_JSON===` / `===END_STRATEGY===` 标记切分说明文本与策略 JSON；策略块不会以原始文本返回，解析成功才填充 `strategy`，否则 `strategy` 为 `null`、整段文本落入 `text`。解析采用「标准 JSON（`strict=False`，容忍字符串内换行）→ 字段正则兜底」两级策略，兼容小模型输出的畸形 JSON。
+`strategy` 仅 `strategy` 路由产出：研究循环取奖励最高一轮的引擎 + 参数，经参数约束与规则 / 伪代码模板生成结构化策略；其余路由 `strategy` 为 `null`。策略始终为结构化 DSL（`engineId + params`），后端不执行模型生成的任何代码。
 
 ### 智能荐股接口的响应格式
 
@@ -740,7 +779,7 @@ flowchart TD
 - 向量化默认走本地 Ollama（`qwen3-embedding:0.6b`），上传文档与检索时需保证 Ollama 在 `localhost:11434` 运行；Ollama 未启动时后台会提示「向量化服务调用失败」，知识库不可用但策略生成等其它功能不受影响。换用其它向量模型后必须清空 `kb_store/` 重建索引，不同模型的向量不可混用。
 - 后台账号复用 `users` 表，权限由单字段 `role` 表示（`0` 普通用户 / `1` 管理员 / `2` 超级管理员）：`role ≥ 1` 即可登录后台，可在「用户管理」中开关授予（仅超级管理员可操作）。超级管理员（`role=2`）全局唯一，由后端首次启动时按 `admin_config.py` 播种（默认 `admin / 123456`），不可删除、不可取消管理员身份。后台登录态与前台的 `quant_token` 完全独立。
 - 后台用户管理接口每次请求都会回库复核管理员身份，账号被删除或被取消权限后，其已签发的 token 立即失效（返回 401 并跳回登录页）。
-- `db_config.py`（数据库密码）与 `llm_config.py`（大模型 / 向量化模型 API Key）含敏感信息，已加入 `.gitignore`，请勿提交到版本库；Docker 部署不使用这两个文件，改由容器入口脚本按环境变量生成。
+- `db_config.py`（数据库密码）含敏感信息，已加入 `.gitignore`，请勿提交；Docker 部署由容器入口脚本按环境变量生成。大模型 / 向量化模型的密钥与私有地址放根目录 `.env`（已 gitignore，模板见 `.env.example`）；`llm_config.py` 已脱敏、可提交，启动时从环境变量 / `.env` 读取，本地与 Docker 共用同一组变量名。
 - 后端默认监听 `127.0.0.1:3000`，前端通过环境变量 `VITE_API_BASE` 可覆盖其 API 地址（默认 `http://localhost:3000/api`）；Docker 镜像在构建时注入 `VITE_API_BASE=/api`，由 Nginx 同源反向代理，无需关心部署地址。
 - Docker 部署下，`_history_cache.json`（行情历史缓存）、`rag_config.json`（后台模块设置）、`rag_eval_dataset.json`（测评集缓存）落在容器可写层，`docker compose down` 或重建容器后会丢失；MySQL 数据与 `kb_store/` 向量库分别存放在 `mysql-data`、`kb-store` 数据卷中，不受影响。完整的 Docker 部署说明见上文「Docker 部署」章节。
 - 后端依赖统一安装在项目根目录的 `.venv/` 虚拟环境（已 gitignore），与系统全局 Python 隔离；`一键启动量化系统.bat` 优先使用 `.venv\Scripts\python.exe`，未检测到虚拟环境时回退到系统 `python` 并给出提示。

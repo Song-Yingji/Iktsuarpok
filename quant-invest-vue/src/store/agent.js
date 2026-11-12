@@ -8,7 +8,7 @@ import { useApp } from './app'
 
 const { toast } = useApp()
 
-const GREETING = '你好，我是策略生成智能体 Quant Buffett。你可以和我聊投资知识，也可以用自然语言描述投资想法（例如「MACD 金叉买入、放量突破」），我会生成可回测的量化策略。'
+const GREETING = '你好，我是 Quant Buffett，你的量化投资伙伴。查行情、看基本面、刷财经新闻、管自选股，交给我就行；想弄懂某个投资概念，我会先翻自己的知识库再认真讲给你听；有投资想法直接说，我会像研究员一样「提假设→真实回测→复盘调整」，帮你打磨成能回测的策略。我不堆术语，有风险也会直说。'
 
 // ---------------- 策略生成智能体 ----------------
 const messages = ref([{ role: 'bot', text: GREETING, typing: false, greeting: true }])
@@ -45,12 +45,18 @@ function send(text) {
 
   // push 进数组的是原对象，直接改原对象不会触发视图更新，
   // 这里读回代理再写，保证文本、策略卡片与检索标记能实时渲染
-  messages.value.push({ role: 'bot', text: '', typing: true, strategy: null, saved: false, rag: null })
+  messages.value.push({ role: 'bot', text: '', typing: true, strategy: null, saved: false, rag: null, intent: null, trace: null })
   const botMsg = messages.value[messages.value.length - 1]
 
   cancelStream = agentApi.chatStream(buildHistory(), {
     onText(chunk) {
       botMsg.text += chunk
+    },
+    onIntent(intent) {
+      botMsg.intent = intent
+    },
+    onTrace(trace) {
+      botMsg.trace = trace
     },
     onRag(data) {
       // 只保留命中条数，用于气泡外的检索标记；具体命中哪些文档不在前端展示

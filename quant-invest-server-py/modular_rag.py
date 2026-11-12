@@ -22,6 +22,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 
 import llm
+import prompts
 import rag
 
 jieba.setLogLevel(60)  # 静音 jieba 首次加载词典的日志
@@ -338,16 +339,8 @@ class ContextCompressor:
 class Generator:
     """生成器：封装 llm.py 的大模型（非流式），基于检索上下文一次性生成回答。"""
 
-    @staticmethod
-    def build_prompt(query: str, contexts: List[str]) -> str:
-        if not contexts:
-            return query
-        blocks = [f'[{i + 1}] {c}' for i, c in enumerate(contexts)]
-        return ('## 参考资料（来自本地知识库，请优先依据以下内容回答）\n'
-                + '\n\n'.join(blocks) + f'\n\n## 我的问题\n{query}')
-
     def generate(self, query: str, documents: List[Document], system_prompt: str = None) -> str:
-        context = self.build_prompt(query, [d.content for d in documents])
+        context = prompts.build_rag_context(query, [d.content for d in documents])
         return llm.chat([{'role': 'user', 'content': context}], system_prompt=system_prompt)
 
 
@@ -363,14 +356,12 @@ class SelfRagModule:
     保证本地模型不可用时不阻断主流程。
     """
 
-    SYSTEM = '你是检索增强系统的内部分析器。严格按用户消息中的指令执行，只输出要求的结果。'
-
     @classmethod
     def _ask(cls, prompt: str) -> str:
         # 判定类调用固定 temperature=0：YES/NO 决策需稳定可复现，
         # 避免同一问题在多次调用间随机翻转（会随机丢弃检索结果）。
         return llm.chat([{'role': 'user', 'content': prompt}],
-                        system_prompt=cls.SYSTEM, temperature=0).strip()
+                        system_prompt=prompts.RAG_SYSTEM, temperature=0).strip()
 
     @staticmethod
     def _yes(text: str, default: bool) -> bool:
@@ -383,27 +374,19 @@ class SelfRagModule:
 
     def should_retrieve(self, query: str) -> bool:
         """步骤 1：判断问题是否需要检索外部知识才能回答。"""
-        prompt = f'判断问题是否需要检索外部知识才能回答。\n只输出 YES 或 NO。\n\n问题：{query}\n'
-        return self._yes(self._ask(prompt), default=True)
+        return self._yes(self._ask(prompts.build_selfrag_retrieve(query)), default=True)
 
     def is_context_useful(self, query: str, context: str) -> bool:
         """步骤 2：判断检索到的内容能否准确回答问题。"""
-        prompt = (f'根据检索到的内容，判断能否准确回答问题。\n只输出 YES 或 NO。\n\n'
-                  f'问题：{query}\n内容：{context}\n')
-        return self._yes(self._ask(prompt), default=True)
+        return self._yes(self._ask(prompts.build_selfrag_useful(query, context)), default=True)
 
     def should_continue_generate(self, query: str, context: str, answer: str) -> bool:
         """步骤 3：判断回答是否完整、准确、无幻觉。"""
-        prompt = (f'判断回答是否完整、准确、无幻觉。\n如果完整准确 → YES\n'
-                  f'如果不完整/错误 → NO\n\n问题：{query}\n内容：{context}\n回答：{answer}\n')
-        return self._yes(self._ask(prompt), default=True)
+        return self._yes(self._ask(prompts.build_selfrag_complete(query, context, answer)), default=True)
 
     def reflect_and_correct(self, query: str, context: str, answer: str) -> str:
         """步骤 4：自我反思修正，输出修正后的最终回答。"""
-        prompt = (f'你是严谨的Self-RAG修正器。\n请检查回答是否：\n1. 符合检索内容\n2. 无幻觉\n'
-                  f'3. 完整回答问题\n\n检索内容：{context}\n问题：{query}\n原回答：{answer}\n\n'
-                  f'请输出修正后的最终回答：\n')
-        corrected = self._ask(prompt)
+        corrected = self._ask(prompts.build_selfrag_reflect(query, context, answer))
         return corrected or answer
 
 
