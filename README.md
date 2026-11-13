@@ -4,8 +4,8 @@
 
 ## 功能特性
 
-- **真实行情引擎**：24 只 A 股 + 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
-- **AI 策略生成智能体（Quant Buffett）**：真正的 Agent 而非单次问答——先由大模型做意图识别，再分四路执行：闲聊直连大模型；量化 / 投资知识问答先检索本地知识库再据参考资料作答；查行情 / 走势 / 基本面 / 财经新闻、加删自选股等走 ReAct 工具循环（思考→调用→观察，最多 6 步）；描述投资想法则进入 R&D-Agent 式「假设→回测→反馈」迭代研究循环（最多 3 轮，ε-贪心多臂老虎机选引擎，按奖励收敛），产出可一键保存的结构化策略；内置工具含个股行情查询、自选股增删（重复添加会提示「股票已在自选股中」）、东方财富基本面、技术走势分析、财经新闻查询、RAG 检索；每条回答附「思考过程」面板展示意图判定与逐步 trace
+- **真实行情引擎**：200 只 A 股（覆盖 17 个板块）+ 4 大指数，实时秒级推送；历史 K 线（前复权）与实时快照分别来自 Baostock / easyquotation，二者严格分离
+- **AI 策略生成智能体（Quant Buffett）**：先做规则优先的意图识别（高置信关键词命中即跳过模型，模糊输入才交大模型判定），再分四路执行：闲聊直连大模型；量化 / 投资知识问答先检索本地知识库再据参考资料作答；查行情 / 走势 / 基本面 / 财经新闻、加删自选股等走 ReAct 工具循环（思考→调用→观察，最多 6 步）；描述投资想法则进入 R&D-Agent 式「假设→回测→反馈」迭代研究循环（最多 3 轮，ε-贪心多臂老虎机选引擎，按奖励收敛），产出可一键保存的结构化策略；内置工具含个股行情查询、自选股增删（重复添加会提示「股票已在自选股中」）、东方财富基本面、技术走势分析、财经新闻查询、RAG 检索；回答以 SSE 流式逐 token 推送，每条附「思考过程」面板展示意图判定与逐步 trace
 - **自由构建（Strategy Builder）**：拖拽式画布搭建策略——数据源 / 技术指标 / 条件判断 / 逻辑组合 / 交易动作五类节点连线成图，端口分数值序列与布尔信号、同类才能相连；保存前实时校验（缺连线 / 类型不匹配 / 成环 / 缺买卖信号等），通过后生成规则文本与伪代码预览，内置双均线 / MACD 零轴上金叉 / RSI 超卖反转三套模板，支持编辑已保存策略并一键回测；图以纯数据 DSL 存入 `saved_strategies`（`engine_id='builder'`），后端白名单求值、不执行任何用户代码
 - **AI 智能荐股（Recommend Buffett）**：从已保存的偏好中选一套，按关注板块筛选标的，输出评分、置信度与理由，可一键加入自选股
 - **向量知识库（RAG）**：独立后台管理页上传文档，经递归分块与本地 Ollama `qwen3-embedding` 向量化后写入本地 Chroma；策略生成时走模块化检索管线（查询改写 → 多路检索 → RRF 融合 → 重排序 → 上下文压缩）召回 Top-K 片段拼入提示词；可开启本地大模型 Self-RAG 分析（判定是否检索、内容是否有用）
@@ -41,7 +41,7 @@ Iktsuarpok/
 │   ├── main.py                   # 应用入口：装配路由、启动行情 / 新闻引擎、超级管理员播种、全局异常处理
 │   ├── routers/                  # 按业务拆分的 APIRouter 包（auth / market / prefs / agent / admin / kb / strategy / watchlist / accounts / tasks）
 │   ├── common.py                 # 跨路由共享工具：统一错误响应、JSON 列读取、用户 / 管理员鉴权依赖
-│   ├── data.py                   # 行情 / 新闻数据引擎与静态配置
+│   ├── data.py                   # 行情 / 新闻数据引擎与静态配置（个股池 200 支，覆盖 17 个板块）
 │   ├── db.py                     # MySQL 数据访问层
 │   ├── auth.py                   # PBKDF2 密码哈希与 HMAC 签名 token（用户 / 管理员双 scope）
 │   ├── admin_config.py           # 超级管理员账号（仅首次启动播种，全局唯一、不可删除）
@@ -53,8 +53,9 @@ Iktsuarpok/
 │   ├── rag.py                    # 本地向量知识库：文本抽取 → 递归分块 → 向量化 → Chroma
 │   ├── modular_rag.py            # 模块化 RAG：查询改写 → 多路检索（向量 + BM25）→ RRF 融合 → 重排序 → 上下文压缩
 │   ├── rag_eval.py               # LlamaIndex 效果测评：评测集合成（缓存）+ 五项指标评估
-│   ├── llm.py                    # 大模型接入层（非流式调用 + 系统提示词）
-│   ├── agent_core.py             # 智能体编排：意图识别 → 闲聊直连 / ReAct 工具循环 / 迭代研究循环（含 trace）
+│   ├── llm.py                    # 大模型接入层（非流式 chat + 流式 chat_stream；qwen3 系列自动关闭深度思考）
+│   ├── prompts.py                # 全部提示词集中管理（人格 / 意图 / 闲聊 / 知识 / 研究 / 荐股 + RAG 构建器，零依赖）
+│   ├── agent_core.py             # 智能体编排：规则优先意图识别 → 闲聊直连 / ReAct 工具循环 / 迭代研究循环（SSE 流式 + trace）
 │   ├── agent_tools.py            # 智能体工具层：行情查询 / 自选增删 / 东方财富基本面 / 走势分析 / RAG 检索
 │   ├── llm_config.py             # 大模型 / 向量化模型配置（已脱敏可提交，从环境变量 / .env 读取密钥）
 │   ├── db_config.py              # 数据库连接配置（已 gitignore，需自行创建）
@@ -146,6 +147,7 @@ EMBED_MODEL=qwen3-embedding:0.6b
 ```
 
 > 不创建 `.env` 时回落到本地 Ollama 默认值（`qwen3:0.6b` + `qwen3-embedding:0.6b`），开箱即用。可切换为任意 OpenAI 兼容服务。模型越小对长系统提示词的指令遵循越弱，智能体的意图识别 / ReAct / 研究循环建议使用 7B 以上模型以保证 JSON 格式正确率。
+> **qwen3 系列自动关闭深度思考**：当 `LLM_MODEL_NAME` 含 `qwen3` 时，`llm.py` 会在每次请求体顶层附加 `enable_thinking: false`（DashScope / 百炼兼容模式约定），跳过默认开启的思考链以加快响应；非 qwen3 模型不受影响，无需手动配置。
 > 向量化模型同理，任何兼容 `/embeddings` 接口的服务都可替换 `EMBED_BASE_URL` / `EMBED_MODEL`，例如阿里云百炼的 `text-embedding-v3`（同样 1024 维）；换模型后建议清空 `kb_store/` 重新建立索引，避免不同模型的向量混用。
 > Docker 部署复用同一组环境变量（见「Docker 部署」），compose 会把它们注入后端容器，`llm_config.py` 在容器内同样按环境变量生效。
 
@@ -459,7 +461,7 @@ flowchart TD
 
 ### 5. AI 智能体：策略生成流程（Quant Buffett）
 
-后端 `agent_core.py` 先做意图识别，再按四路分发执行；`agent_tools.py` 提供白名单工具。全程非流式，一次请求返回 `{intent, trace, rag, text, strategy}`，前端把 `trace` 渲染成可展开的「思考过程」面板。
+后端 `agent_core.py` 先做意图识别，再按四路分发执行；`agent_tools.py` 提供白名单工具。编排入口 `run_agent_stream` 以 SSE（Server-Sent Events）流式推送，事件序列为 `intent → trace → rag → text → strategy → done`（异常时 `error`），前端逐事件渲染意图徽标、可展开的「思考过程」面板与文本 / 策略卡片。
 
 ```mermaid
 sequenceDiagram
@@ -475,8 +477,9 @@ sequenceDiagram
     U->>V: 输入消息并发送
     V->>S: send(text) → buildHistory
     S->>M: POST /api/agent/generate-strategy
-    M->>C: run_agent(messages, uid)
-    C->>L: 意图识别（INTENT_PROMPT）
+    M->>C: run_agent_stream(messages, uid)
+    C->>C: 规则优先意图识别（高置信正则命中即跳过模型）
+    C->>L: 模糊时交 INTENT_PROMPT 判定
     L-->>C: {intent: chat|knowledge|tool|strategy, reason}
     alt intent = chat（闲聊）
         C->>L: 注入闲聊提示词直连大模型
@@ -501,8 +504,8 @@ sequenceDiagram
         end
         C->>C: 选出奖励最高的一轮作为最终策略
     end
-    C-->>M: {intent, trace, rag, text, strategy}
-    M-->>S: JSON → onIntent/onTrace/onRag/onText/onStrategy
+    C-->>M: 逐事件产出 intent / trace / rag / text / strategy / done
+    M-->>S: SSE 事件流 → onIntent/onTrace/onRag/onText/onStrategy
     S->>V: 渲染意图徽标 + 思考过程 + 文本 / 策略卡片
     U->>V: 点击「保存到我的量化策略」
     V->>S: saveStrategy → POST /api/strategy/saved
@@ -512,7 +515,7 @@ sequenceDiagram
 
 #### 5.1 意图识别与四路分发
 
-`classify_intent` 用 `INTENT_PROMPT` 让大模型输出 `{intent, reason}`（`chat` / `knowledge` / `tool` / `strategy`），解析失败时回落到关键词规则 `_rule_intent`。四路各自独立：闲聊注入 `CHAT_PROMPT` 直连大模型；知识问答走 `run_knowledge`；工具走 ReAct；策略走迭代研究循环。意图判定理由与后续每一步都会写入 `trace`，供前端「思考过程」面板展示。
+意图识别采用「规则优先」三级策略：`_rule_intent` 先用高置信关键词 / 正则命中直接定档（如明确的买卖 / 回测指令、知识性问句），命中即跳过大模型以提速；模糊输入才交 `INTENT_PROMPT` 让大模型输出 `{intent, reason}`（`chat` / `knowledge` / `tool` / `strategy`）；大模型解析失败或给出非法意图时再回落到 `_fallback_intent` 宽松兜底。四路各自独立：闲聊注入 `CHAT_PROMPT` 直连大模型；知识问答走 `run_knowledge`；工具走 ReAct；策略走迭代研究循环。意图判定理由与后续每一步都会写入 `trace`，供前端「思考过程」面板展示。
 
 量化 / 投资知识性问题（如「什么是夏普比率」「MACD 怎么用」）不算闲聊：`run_knowledge` 先调 `rag_search` 召回本地知识库片段，把片段作为「参考资料」附在 `KNOWLEDGE_PROMPT` 末尾再交给大模型，要求优先依据参考资料作答并用《文档名》标注来源；命中条数计入 `rag.count`（气泡外显示检索图标），未命中时模型结合自身知识补充并说明。
 
@@ -664,7 +667,7 @@ flowchart TD
 | DELETE | `/api/prefs/{id}` | 删除偏好（删默认时自动补选一套） |
 | GET/POST | `/api/settings` | 交易提醒开关（与偏好无关，不参与荐股提示词） |
 | POST | `/api/agent/recommend` | 智能荐股（非流式，body 传 `prefsId`） |
-| POST | `/api/agent/generate-strategy` | 策略生成智能体（非流式；意图识别 → 闲聊 / ReAct / 研究循环，返回 intent + trace） |
+| POST | `/api/agent/generate-strategy` | 策略生成智能体（SSE 流式；规则优先意图识别 → 闲聊 / ReAct / 研究循环，逐事件推送 intent / trace / rag / text / strategy） |
 | GET | `/api/strategy/frameworks` | 回测框架列表 |
 | POST | `/api/strategy/backtest` | 执行回测（内置引擎 / 自由构建图按 `strategyId` 路由） |
 | POST | `/api/strategy/builder/validate` | 自由构建画布校验（返回错误列表，通过时附规则文本与伪代码） |
@@ -702,21 +705,21 @@ flowchart TD
 
 ### 策略生成接口的响应格式
 
-`POST /api/agent/generate-strategy` 请求体为 `{ messages: [{role, content}, ...] }`（需登录），响应为 JSON：
+`POST /api/agent/generate-strategy` 请求体为 `{ messages: [{role, content}, ...] }`（需登录），响应为 **SSE 事件流**（`Content-Type: text/event-stream`），而非一次性 JSON。每个事件按 `event: <名称>\ndata: <JSON>\n\n` 帧格式下发，前端逐事件消费；响应头带 `Cache-Control: no-cache`、`X-Accel-Buffering: no`（关闭 nginx 缓冲，保证逐事件下发）、`Connection: keep-alive`。事件依次为：
 
-```json
-{
-  "intent": "chat | knowledge | tool | strategy",
-  "trace": { "intent": "...", "reason": "...", "mode": "...", "steps": [], "rounds": [] },
-  "rag": { "count": 2, "sources": [{ "docName": "...", "score": 0.812 }] },
-  "text": "说明文本",
-  "strategy": { "name": "...", "engineId": "...", "params": {}, "rules": [], "code": "..." }
-}
-```
+| 事件 | data 载荷 | 说明 |
+| --- | --- | --- |
+| `intent` | `{intent, reason}` | 意图识别结果（`chat` / `knowledge` / `tool` / `strategy`）与判定理由 |
+| `trace` | `{trace: [...]}` | 思考过程**累积快照**，前端直接整体替换；每步带 `type`（`intent` / `chat` / `knowledge` / `react` / `research`） |
+| `rag` | `{count, sources: [{docName, score}]}` | 检索命中条数与来源，仅命中时非零 |
+| `text` | `"增量文本"` | 闲聊 / 知识问答逐 token 推送；工具 / 策略为整段 |
+| `strategy` | `{name, type, engineId, params, rules, code}` | 策略卡片，研究循环每刷新最优即推送一次 |
+| `done` | `{}` | 流正常结束 |
+| `error` | `{message}` | 执行异常时下发，前端展示兜底文案 |
 
-`intent` 为意图识别结果；`trace` 记录判定理由与执行过程——`knowledge` 路由为检索命中条数，`tool` 路由为 `steps`（每步 thought / tool / args / observation），`strategy` 路由为 `rounds`（每轮 engine / params / reward / decision / rationale / metrics），前端渲染成「思考过程」面板。`rag` 仅在检索命中时非零（知识问答检索、ReAct 的 `rag_search` 或研究循环首轮检索），前端据此在气泡外右下角显示检索图标。知识库为空或不可用时 `rag.count` 为 0，不显示图标。
+`trace` 数组按路由累积不同步骤：`knowledge` 步记检索命中条数；`react` 步含 `step / thought / tool / args / observation`（末步 `final: true`）；`research` 步含 `round / engine / params / reward / decision / rationale / metrics`。前端把整个 `trace` 渲染成可展开的「思考过程」面板。`rag` 仅在检索命中时非零（知识问答检索、ReAct 的 `rag_search` 或研究循环首轮检索），前端据此在气泡外右下角显示检索图标；知识库为空或不可用时 `count` 为 0，不显示图标。
 
-`strategy` 仅 `strategy` 路由产出：研究循环取奖励最高一轮的引擎 + 参数，经参数约束与规则 / 伪代码模板生成结构化策略；其余路由 `strategy` 为 `null`。策略始终为结构化 DSL（`engineId + params`），后端不执行模型生成的任何代码。
+`strategy` 事件仅 `strategy` 路由产出：研究循环取奖励最高一轮的引擎 + 参数，经参数约束与规则 / 伪代码模板生成结构化策略，其余路由不推送该事件。策略始终为结构化 DSL（`engineId + params`），后端不执行模型生成的任何代码。
 
 ### 智能荐股接口的响应格式
 
@@ -745,7 +748,7 @@ flowchart TD
 | uvicorn | >=0.23 | ASGI 服务器，运行 FastAPI |
 | easyquotation | >=0.7.7 | 实时行情（新浪源） |
 | baostock | >=0.8.8 | 历史行情（前复权日 K） |
-| requests | >=2.25 | HTTP 请求（财联社新闻、大模型非流式调用、向量化接口） |
+| requests | >=2.25 | HTTP 请求（财联社新闻、大模型流式 / 非流式调用、向量化接口） |
 | pymysql | >=1.1 | MySQL 数据库驱动 |
 | chromadb | >=0.4.24 | 本地向量知识库（持久化 + 余弦相似度检索） |
 | pypdfium2 | >=4.0 | PDF 文本抽取 |
